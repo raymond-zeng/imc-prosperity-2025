@@ -2,6 +2,7 @@ import jsonpickle
 from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
 import numpy as np
 import math
+from collections import deque
 
 class Strategy:
     
@@ -24,12 +25,17 @@ class Strategy:
         self.orders.append(Order(self.symbol, price, -quantity))
 
 class MarketMakingStrategy(Strategy):
+    # def __init__(self, symbol: str, limit: int):
+    #     super().__init__(symbol, limit)
+    #     self.window = deque()
+    #     self.window_size = 10
+    #     self.limits_hit = 0
+    #     self.limit_threshold = 5
 
     def get_true_value(self, state: TradingState) -> int:
         raise NotImplementedError
     
     def act(self, state: TradingState) -> None:
-
         # Get True Value of Asset
         true_value = self.get_true_value(state)
 
@@ -40,17 +46,37 @@ class MarketMakingStrategy(Strategy):
 
         # Get buy and sell limits
         position = state.position.get(self.symbol, 0)
+
         to_buy = self.limit - position
         to_sell = self.limit + position
+
+        if abs(position) == self.limit:
+            self.limits_hit += 1
+        else:
+            self.limits_hit = 0
 
         max_buy_price = true_value - 1 if position > self.limit * 0.5 else true_value
         min_sell_price = true_value + 1 if position < self.limit * -0.5 else true_value
 
+        # if self.limits_hit >= self.limit_threshold and to_buy > 0:
+        #     # Liquidate position if limit hit
+        #     self.limits_hit = 0
+        #     quantity = to_buy // 2
+        #     self.buy(true_value - 1, quantity)
+        #     to_buy -= quantity
+
         for price, volume in sell_orders:
-            if to_buy > 0 and price <= max_buy_price:
+            if to_buy > 0 and price <= max_buy_price:   
                 quantity = min(to_buy, -volume)
                 self.buy(state, price, quantity)
                 to_buy -= quantity
+
+        # if self.limits_hit >= self.limit_threshold and to_sell > 0:
+        #     # Liquidate position if limit hit
+        #     self.limits_hit = 0
+        #     quantity = to_sell // 2
+        #     self.sell(true_value + 1, quantity)
+        #     to_sell -= quantity
 
         for price, volume in buy_orders:
             if to_sell > 0 and price >= min_sell_price:
@@ -71,7 +97,6 @@ class ResinStrategy(MarketMakingStrategy):
 
         mean_price = (mean_buy_price + mean_sell_price) / 2
         return int(mean_price)
-        # return 10_000
 
 class Trader:
     
