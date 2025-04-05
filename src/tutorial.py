@@ -62,7 +62,16 @@ class MarketMakingStrategy(Strategy):
 class ResinStrategy(MarketMakingStrategy):
 
     def get_true_value(self, state: TradingState) -> int:
-        return 10_000
+        order_depth = state.order_depths[self.symbol]
+        buy_orders = sorted(order_depth.buy_orders.items(), reverse=True)
+        sell_orders = sorted(order_depth.sell_orders.items())
+
+        mean_buy_price = np.mean([price for price, volume in buy_orders])
+        mean_sell_price = np.mean([price for price, volume in sell_orders])
+
+        mean_price = (mean_buy_price + mean_sell_price) / 2
+        return int(mean_price)
+        # return 10_000
 
 class Trader:
     
