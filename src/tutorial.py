@@ -65,6 +65,22 @@ class MarketMakingStrategy(Strategy):
         #     self.buy(true_value - 1, quantity)
         #     to_buy -= quantity
 
+        if self.limits_hit >= self.limit_threshold and to_buy > 0:
+            self.limits_hit = 0
+            quantity = to_buy // 2
+            liquidation_price = true_value - 1
+
+            # Try to match against the current book first
+            for price, volume in sell_orders:
+                if price <= liquidation_price and to_buy > 0:
+                    fill_qty = min(to_buy, -volume)
+                    self.buy(state, price, fill_qty)
+                    to_buy -= fill_qty
+
+            # If not filled, place a limit order at liquidation_price?
+            if to_buy > 0:
+                self.buy(state, liquidation_price, to_buy)
+
         for price, volume in sell_orders:
             if to_buy > 0 and price <= max_buy_price:   
                 quantity = min(to_buy, -volume)
@@ -77,6 +93,22 @@ class MarketMakingStrategy(Strategy):
         #     quantity = to_sell // 2
         #     self.sell(true_value + 1, quantity)
         #     to_sell -= quantity
+
+        if self.limits_hit >= self.limit_threshold and to_sell > 0:
+            self.limits_hit = 0
+            quantity = to_sell // 2
+            liquidation_price = true_value + 1
+
+            # Try to match against the current book first
+            for price, volume in buy_orders:
+                if price >= liquidation_price and to_sell > 0:
+                    fill_qty = min(to_sell, volume)
+                    self.sell(state, price, fill_qty)
+                    to_sell -= fill_qty
+
+            # If not filled, place a limit order at liquidation_price?
+            if to_sell > 0:
+                self.sell(state, liquidation_price, to_sell)
 
         for price, volume in buy_orders:
             if to_sell > 0 and price >= min_sell_price:
