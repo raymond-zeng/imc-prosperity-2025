@@ -25,12 +25,12 @@ class Strategy:
         self.orders.append(Order(self.symbol, price, -quantity))
 
 class MarketMakingStrategy(Strategy):
-    # def __init__(self, symbol: str, limit: int):
-    #     super().__init__(symbol, limit)
-    #     self.window = deque()
-    #     self.window_size = 10
-    #     self.limits_hit = 0
-    #     self.limit_threshold = 5
+    def __init__(self, symbol: str, limit: int):
+        super().__init__(symbol, limit)
+        self.window = deque()
+        self.window_size = 10
+        self.limits_hit = 0
+        self.limit_threshold = 5
 
     def get_true_value(self, state: TradingState) -> int:
         raise NotImplementedError
