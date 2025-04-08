@@ -58,13 +58,6 @@ class MarketMakingStrategy(Strategy):
         max_buy_price = true_value - 1 if position > self.limit * 0.5 else true_value
         min_sell_price = true_value + 1 if position < self.limit * -0.5 else true_value
 
-        # if self.limits_hit >= self.limit_threshold and to_buy > 0:
-        #     # Liquidate position if limit hit
-        #     self.limits_hit = 0
-        #     quantity = to_buy // 2
-        #     self.buy(true_value - 1, quantity)
-        #     to_buy -= quantity
-
         if self.limits_hit >= self.limit_threshold and to_buy > 0:
             self.limits_hit = 0
             quantity = to_buy // 2
@@ -86,13 +79,6 @@ class MarketMakingStrategy(Strategy):
                 quantity = min(to_buy, -volume)
                 self.buy(state, price, quantity)
                 to_buy -= quantity
-
-        # if self.limits_hit >= self.limit_threshold and to_sell > 0:
-        #     # Liquidate position if limit hit
-        #     self.limits_hit = 0
-        #     quantity = to_sell // 2
-        #     self.sell(true_value + 1, quantity)
-        #     to_sell -= quantity
 
         if self.limits_hit >= self.limit_threshold and to_sell > 0:
             self.limits_hit = 0
@@ -120,14 +106,28 @@ class MarketMakingStrategy(Strategy):
 class ResinStrategy(MarketMakingStrategy):
 
     def get_true_value(self, state: TradingState) -> int:
+        # order_depth = state.order_depths[self.symbol]
+        # buy_orders = sorted(order_depth.buy_orders.items(), reverse=True)
+        # sell_orders = sorted(order_depth.sell_orders.items())
+
+        # mean_buy_price = np.mean([price for price, volume in buy_orders])
+        # mean_sell_price = np.mean([price for price, volume in sell_orders])
+
+        # mean_price = (mean_buy_price + mean_sell_price) / 2
+        # return int(mean_price)
+
         order_depth = state.order_depths[self.symbol]
         buy_orders = sorted(order_depth.buy_orders.items(), reverse=True)
         sell_orders = sorted(order_depth.sell_orders.items())
 
-        mean_buy_price = np.mean([price for price, volume in buy_orders])
-        mean_sell_price = np.mean([price for price, volume in sell_orders])
+        total_buy_volume = sum(abs(v) for _, v in buy_orders)
+        total_sell_volume = sum(abs(v) for _, v in sell_orders)
 
-        mean_price = (mean_buy_price + mean_sell_price) / 2
+        weighted_buy = sum(price * abs(volume) for price, volume in buy_orders) / (total_buy_volume + 1e-6)
+        weighted_sell = sum(price * abs(volume) for price, volume in sell_orders) / (total_sell_volume + 1e-6)
+
+        mean_price = (weighted_buy + weighted_sell) / 2
+
         return int(mean_price)
 
 class Trader:
