@@ -50,7 +50,7 @@ class MarketMakingStrategy(Strategy):
         to_buy = self.limit - position
         to_sell = self.limit + position
 
-        if abs(position) == self.limit:
+        if abs(position) >= self.limit * 0.9:
             self.limits_hit += 1
         else:
             self.limits_hit = 0
@@ -72,7 +72,7 @@ class MarketMakingStrategy(Strategy):
 
             # If not filled, place a limit order at liquidation_price?
             if to_buy > 0:
-                self.buy(state, liquidation_price, to_buy)
+                self.buy(state, max(sell_orders[0][0], liquidation_price), to_buy)
 
         for price, volume in sell_orders:
             if to_buy > 0 and price <= max_buy_price:   
@@ -94,7 +94,7 @@ class MarketMakingStrategy(Strategy):
 
             # If not filled, place a limit order at liquidation_price?
             if to_sell > 0:
-                self.sell(state, liquidation_price, to_sell)
+                self.sell(state, min(buy_orders[0][0], liquidation_price), to_sell)
 
         for price, volume in buy_orders:
             if to_sell > 0 and price >= min_sell_price:
@@ -106,27 +106,24 @@ class MarketMakingStrategy(Strategy):
 class ResinStrategy(MarketMakingStrategy):
 
     def get_true_value(self, state: TradingState) -> int:
-        # order_depth = state.order_depths[self.symbol]
-        # buy_orders = sorted(order_depth.buy_orders.items(), reverse=True)
-        # sell_orders = sorted(order_depth.sell_orders.items())
-
-        # mean_buy_price = np.mean([price for price, volume in buy_orders])
-        # mean_sell_price = np.mean([price for price, volume in sell_orders])
-
-        # mean_price = (mean_buy_price + mean_sell_price) / 2
-        # return int(mean_price)
-
         order_depth = state.order_depths[self.symbol]
         buy_orders = sorted(order_depth.buy_orders.items(), reverse=True)
         sell_orders = sorted(order_depth.sell_orders.items())
 
-        total_buy_volume = sum(abs(v) for _, v in buy_orders)
-        total_sell_volume = sum(abs(v) for _, v in sell_orders)
+        mean_buy_price = np.mean([price for price, volume in buy_orders])
+        mean_sell_price = np.mean([price for price, volume in sell_orders])
 
-        weighted_buy = sum(price * abs(volume) for price, volume in buy_orders) / (total_buy_volume + 1e-6)
-        weighted_sell = sum(price * abs(volume) for price, volume in sell_orders) / (total_sell_volume + 1e-6)
+        # total_buy_volume = sum(volume for _, volume in buy_orders)
+        # vw_buy = sum(price * volume for price, volume in buy_orders) / total_buy_volume if total_buy_volume else 0
 
-        mean_price = (weighted_buy + weighted_sell) / 2
+        # total_sell_volume = sum(volume for _, volume in sell_orders)
+        # vw_sell = sum(price * volume for price, volume in sell_orders) / total_sell_volume if total_sell_volume else 0
+
+        mean_price = (mean_buy_price + mean_sell_price) / 2
+        # mean_price = (vw_buy + vw_sell) / 2
+
+        spread = sell_orders[0][0] - buy_orders[0][0]
+        mean_price += 0.1 * spread  # bias toward ask side
 
         return int(mean_price)
 
