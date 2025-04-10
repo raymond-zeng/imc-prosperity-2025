@@ -21,7 +21,6 @@ class MarketMakeStrategy():
         self.soft_position_limit = 30 # Soft limit for managing position size before adjustments
         self.manage_position = False
         self.fair_value = 0
-        self.trader_data = trader_data
 
     def fair_price(self, order_depth: OrderDepth, trader_data) -> float:
         raise NotImplementedError
@@ -205,10 +204,11 @@ class KelpStrategy(MarketMakeStrategy):
         super().__init__(symbol, limit, order_depth, trader_data)
         self.prevent_adverse = True
         self.adverse_volume = 24
-        self.reversion_beta = -0.3
+        self.reversion_beta = -0.229
         self.join_edge = 0
         self.default_edge = 1
         self.fair_value = 0
+        self.trader_data = trader_data
 
     def fair_price(self) -> float:
         fair = None
@@ -259,80 +259,62 @@ class KelpStrategy(MarketMakeStrategy):
     def act(self, state: TradingState):
         self.fair_value = self.fair_price()
         return super().act(state)
-    
-class SquidInkStrategy(MarketMakeStrategy):
 
+class SquidInkStrategy(MarketMakeStrategy):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
         super().__init__(symbol, limit, order_depth, trader_data)
-        self.take_width = 2
-        self.clear_width = 1
-        self.disregard_edge = 0
-        self.join_edge = 2
-        self.default_edge = 3
-        self.mean_reversion_alpha = 0.17625
-        self.threshold = 2.0
+        self.window_size = 20  # Rolling window size
+        self.prices = deque(maxlen=self.window_size)
+        self.deviation_threshold = 0.05  # 5% deviation
+        self.base_position_size = limit  # Base position size
+        self.max_volatility = 0.05  # Maximum volatility threshold (5%)
 
     def fair_price(self) -> float:
-        fair = None
-        if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
-            best_ask = min(self.order_depth.sell_orders.keys())
-            best_bid = max(self.order_depth.buy_orders.keys())
-            mid_price = (best_ask + best_bid) / 2
+        # Update rolling price window
+        mid_price = (min(self.order_depth.sell_orders.keys()) + max(self.order_depth.buy_orders.keys())) / 2
+        self.prices.append(mid_price)
 
-            if "SQUID_INK_price_history" not in self.trader_data:
-                self.trader_data["SQUID_INK_price_history"] = deque(maxlen=500)
-            
-            self.trader_data["SQUID_INK_price_history"].append(mid_price)  # Store the latest mid-price
-            prices = self.trader_data["SQUID_INK_price_history"]
+        # Calculate rolling average and standard deviation
+        if len(self.prices) >= self.window_size:
+            avg_price = np.mean(self.prices)
+            std_dev = np.std(self.prices)
+            return avg_price, std_dev
+        return None, None
 
-            rolling_mean = np.mean(prices)  # Calculate the rolling mean of the last 500 prices
-            std_dev = np.std(prices)  # Calculate the standard deviation of the last 500 prices
+    def adjust_position_size(self, std_dev: float) -> int:
+        """
+        Adjust the position size based on the recent volatility (std_dev).
+        """
+        # Scale position size inversely proportional to volatility
+        scaling_factor = max(0, 1 - min(std_dev / self.max_volatility, 1))
+        return int(self.base_position_size * scaling_factor)
 
-            signal = None
-            if mid_price < rolling_mean - self.threshold * std_dev:
-                signal = "BUY"
-            elif mid_price > rolling_mean + self.threshold * std_dev:
-                signal = "SELL"
-            self.trader_data["SQUID_INK_signal"] = signal
-
-            cooldown = self.trader_data.get("SQUID_INK_cooldown", 0)
-            if signal and cooldown == 0:
-                self.trader_data["SQUID_INK_signal_triggered"] = True
-                self.trader_data["SQUID_INK_signal_cooldown"] = 10
-            else:
-                self.trader_data["SQUID_INK_signal_triggered"] = False
-                self.trader_data["SQUID_INK_signal_cooldown"] = max(0, cooldown - 1)
-            
-            fair = (1 - self.mean_reversion_alpha) * mid_price + self.mean_reversion_alpha * rolling_mean
-
-        return fair
-    
     def act(self, state: TradingState):
-        self.fair_value = self.fair_price()
-        position = state.position.get(self.symbol, 0)
-        orders = []
-        signal = self.trader_data.get("SQUID_INK_signal", None)
-        triggered = self.trader_data.get("SQUID_INK_signal_triggered", False)
-        buy_order_volume = 0
-        sell_order_volume = 0
+        avg_price, std_dev = self.fair_price()
+        if avg_price is not None:
+            current_price = (min(self.order_depth.sell_orders.keys()) + max(self.order_depth.buy_orders.keys())) / 2
+            deviation = (current_price - avg_price) / avg_price
 
-        if triggered:
-            if signal == "BUY":
-                best_ask = min(self.order_depth.sell_orders.keys())
-                qty = min(self.limit - position, -self.order_depth.sell_orders[best_ask])
-                if qty > 0:
-                    orders.append(Order(self.symbol, best_ask, qty))
-                    buy_order_volume += qty
-            elif signal == "SELL":
-                best_bid = max(self.order_depth.buy_orders.keys())
-                qty = min(self.limit + position, self.order_depth.buy_orders[best_bid])
-                if qty > 0:
-                    orders.append(Order(self.symbol, best_bid, -qty))
-                    sell_order_volume += qty
-        
-        clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
-        make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
-        return orders + clear + make
+            # Adjust position size based on volatility
+            adjusted_limit = self.adjust_position_size(std_dev)
+            self.limit = adjusted_limit  # Update the limit dynamically
+
+            # Dynamic deviation threshold
+            self.deviation_threshold = max(0.02, min(0.05, std_dev / avg_price))
+
+            # If deviation exceeds threshold, take a contrarian position
+            if deviation > self.deviation_threshold:
+                # Price is overbought, consider selling
+                self.fair_value = avg_price - std_dev
+            elif deviation < -self.deviation_threshold:
+                # Price is oversold, consider buying
+                self.fair_value = avg_price + std_dev
+
+            # Add stop-loss and take-profit levels
+            self.stop_loss = avg_price - 2 * std_dev
+            self.take_profit = avg_price + 2 * std_dev
+
+        return super().act(state)
 
 class Trader:
 
