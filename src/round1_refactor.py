@@ -266,10 +266,11 @@ class SquidInkStrategy(MarketMakeStrategy):
         super().__init__(symbol, limit, order_depth, trader_data)
         self.take_width = 2
         self.clear_width = 1
-        self.disregard_edge = 1
+        self.disregard_edge = 0
         self.join_edge = 2
         self.default_edge = 3
         self.mean_reversion_alpha = 0.17625
+        self.threshold = 2.0
 
     def fair_price(self) -> float:
         fair = None
@@ -288,9 +289,9 @@ class SquidInkStrategy(MarketMakeStrategy):
             std_dev = np.std(prices)  # Calculate the standard deviation of the last 500 prices
 
             signal = None
-            if mid_price < rolling_mean - 2.0 * std_dev:
+            if mid_price < rolling_mean - self.threshold * std_dev:
                 signal = "BUY"
-            elif mid_price > rolling_mean + 2.0 * std_dev:
+            elif mid_price > rolling_mean + self.threshold * std_dev:
                 signal = "SELL"
             self.trader_data["SQUID_INK_signal"] = signal
 
