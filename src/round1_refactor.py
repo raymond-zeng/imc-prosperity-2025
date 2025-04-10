@@ -19,7 +19,7 @@ class MarketMakeStrategy():
         self.reversion_beta = 1  # Factor used to adjust fair value predictions based on past price deviations
         self.default_edge = 1 # Default offset from the fair value if no optimal edge is available
         self.adverse_volume = 0 # Volume threshold to define adverse market conditions
-        self.soft_position_limit = 50 # Soft limit for managing position size before adjustments
+        self.soft_position_limit = 30 # Soft limit for managing position size before adjustments
         self.manage_position = False
         self.fair_value = 0
 
@@ -195,7 +195,7 @@ class ResinStrategy(MarketMakeStrategy):
         super().__init__(symbol, limit, order_depth, trader_data)
         self.join_edge = 2
         self.default_edge = 4
-        self.soft_position_limit = 25
+        self.soft_position_limit = 33
         self.manage_position = True
         self.fair_value = 10_000
     
@@ -204,7 +204,7 @@ class KelpStrategy(MarketMakeStrategy):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
         super().__init__(symbol, limit, order_depth, trader_data)
         self.prevent_adverse = True
-        self.adverse_volume = 37
+        self.adverse_volume = 24
         self.reversion_beta = -0.229
         self.join_edge = 0
         self.default_edge = 1
@@ -259,8 +259,6 @@ class KelpStrategy(MarketMakeStrategy):
 
     def act(self, state: TradingState):
         self.fair_value = self.fair_price()
-        to_write = "fair_value: " + str(self.fair_value)
-        f.write(to_write)
         return super().act(state)
 
 class Trader:
@@ -283,6 +281,5 @@ class Trader:
         for symbol, strategy in strategies.items():
             if symbol in state.order_depths:
                 orders[symbol] = strategy.act(state)
-
-        trader_data = jsonpickle.encode(trader_data)
-        return orders, conversions, trader_data
+        new_trader_data = jsonpickle.encode(trader_data)
+        return orders, conversions, new_trader_data

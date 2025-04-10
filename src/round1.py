@@ -6,6 +6,8 @@ import jsonpickle  # for serializing/deserializing trader-specific data across r
 import numpy as np
 import math
 
+f = open("original.txt", "w")
+
 # Define products handled by the trader.
 class Product:
     RAINFOREST_RESIN = "RAINFOREST_RESIN"  # Product identifier for RAINFOREST_RESIN
@@ -217,6 +219,8 @@ class Trader:
             ]
             mm_ask = min(filtered_ask) if len(filtered_ask) > 0 else None
             mm_bid = max(filtered_bid) if len(filtered_bid) > 0 else None
+            
+            f.write("mm_ask: " + str(mm_ask) + " mm_bid:" + str(mm_bid))
 
             # If filtered values are missing, use the best bid/ask or fall back to the last price.
             if mm_ask == None or mm_bid == None:
