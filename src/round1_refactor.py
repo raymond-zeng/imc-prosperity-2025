@@ -21,6 +21,7 @@ class MarketMakeStrategy():
         self.soft_position_limit = 30 # Soft limit for managing position size before adjustments
         self.manage_position = False
         self.fair_value = 0
+        self.trader_data = trader_data
 
     def fair_price(self, order_depth: OrderDepth, trader_data) -> float:
         raise NotImplementedError
@@ -204,11 +205,10 @@ class KelpStrategy(MarketMakeStrategy):
         super().__init__(symbol, limit, order_depth, trader_data)
         self.prevent_adverse = True
         self.adverse_volume = 24
-        self.reversion_beta = -0.229
+        self.reversion_beta = -0.3
         self.join_edge = 0
         self.default_edge = 1
         self.fair_value = 0
-        self.trader_data = trader_data
 
     def fair_price(self) -> float:
         fair = None
@@ -259,13 +259,87 @@ class KelpStrategy(MarketMakeStrategy):
     def act(self, state: TradingState):
         self.fair_value = self.fair_price()
         return super().act(state)
+    
+class SquidInkStrategy(MarketMakeStrategy):
+
+    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
+        super().__init__(symbol, limit, order_depth, trader_data)
+        self.take_width = 2
+        self.clear_width = 1
+        self.disregard_edge = 1
+        self.join_edge = 2
+        self.default_edge = 3
+        self.mean_reversion_alpha = 0.19
+
+    def fair_price(self) -> float:
+        fair = None
+        if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
+            best_ask = min(self.order_depth.sell_orders.keys())
+            best_bid = max(self.order_depth.buy_orders.keys())
+            mid_price = (best_ask + best_bid) / 2
+
+            if "SQUID_INK_price_history" not in self.trader_data:
+                self.trader_data["SQUID_INK_price_history"] = deque(maxlen=500)
+            
+            self.trader_data["SQUID_INK_price_history"].append(mid_price)  # Store the latest mid-price
+            prices = self.trader_data["SQUID_INK_price_history"]
+
+            rolling_mean = np.mean(prices)  # Calculate the rolling mean of the last 500 prices
+            std_dev = np.std(prices)  # Calculate the standard deviation of the last 500 prices
+
+            signal = None
+            if mid_price < rolling_mean - 2.0 * std_dev:
+                signal = "BUY"
+            elif mid_price > rolling_mean + 2.0 * std_dev:
+                signal = "SELL"
+            self.trader_data["SQUID_INK_signal"] = signal
+
+            cooldown = self.trader_data.get("SQUID_INK_cooldown", 0)
+            if signal and cooldown == 0:
+                self.trader_data["SQUID_INK_signal_triggered"] = True
+                self.trader_data["SQUID_INK_signal_cooldown"] = 10
+            else:
+                self.trader_data["SQUID_INK_signal_triggered"] = False
+                self.trader_data["SQUID_INK_signal_cooldown"] = max(0, cooldown - 1)
+            
+            fair = (1 - self.mean_reversion_alpha) * mid_price + self.mean_reversion_alpha * rolling_mean
+
+        return fair
+    
+    def act(self, state: TradingState):
+        self.fair_value = self.fair_price()
+        position = state.position.get(self.symbol, 0)
+        orders = []
+        signal = self.trader_data.get("SQUID_INK_signal", None)
+        triggered = self.trader_data.get("SQUID_INK_signal_triggered", False)
+        buy_order_volume = 0
+        sell_order_volume = 0
+
+        if triggered:
+            if signal == "BUY":
+                best_ask = min(self.order_depth.sell_orders.keys())
+                qty = min(self.limit - position, -self.order_depth.sell_orders[best_ask])
+                if qty > 0:
+                    orders.append(Order(self.symbol, best_ask, qty))
+                    buy_order_volume += qty
+            elif signal == "SELL":
+                best_bid = max(self.order_depth.buy_orders.keys())
+                qty = min(self.limit + position, self.order_depth.buy_orders[best_bid])
+                if qty > 0:
+                    orders.append(Order(self.symbol, best_bid, -qty))
+                    sell_order_volume += qty
+        
+        clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
+        make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
+        return orders + clear + make
 
 class Trader:
 
     def __init__(self):
         self.limits = {
             "RAINFOREST_RESIN" : 50,
-            "KELP" : 50
+            "KELP" : 50,
+            "SQUID_INK" : 50
         }
 
     def run(self, state : TradingState) -> tuple[dict[Symbol, list[Order]], int , str]:
@@ -273,7 +347,7 @@ class Trader:
         if state.traderData != None and state.traderData != "":
             trader_data = jsonpickle.decode(state.traderData)
         strategies = {symbol: constructor(symbol, self.limits[symbol], state.order_depths[symbol], trader_data) for symbol, constructor in {
-            "RAINFOREST_RESIN" : ResinStrategy, "KELP" : KelpStrategy
+            "RAINFOREST_RESIN" : ResinStrategy, "KELP" : KelpStrategy, "SQUID_INK" : SquidInkStrategy
         }.items()}
         conversions = 0
         orders = {}
