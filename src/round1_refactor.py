@@ -4,7 +4,6 @@ import numpy as np
 import math
 from collections import deque
 
-f = open("test.txt", "w")
 class MarketMakeStrategy():
 
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
