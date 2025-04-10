@@ -28,18 +28,18 @@ PARAMS = {
         "disregard_edge": 1,  # Orders inside this range from fair value are disregarded for joining or undercutting
         "join_edge": 2,       # Orders within this edge will be joined directly
         "default_edge": 4,    # Default offset from the fair value if no optimal edge is available
-        "soft_position_limit": 10,  # Soft limit for managing position size before adjustments
+        "soft_position_limit": 25,  # Soft limit for managing position size before adjustments
     },
-    # Product.KELP: {
-    #     "take_width": 1,
-    #     "clear_width": 0,
-    #     "prevent_adverse": True,  # Flag to prevent taking orders that could lead to adverse price movements
-    #     "adverse_volume": 15,     # Volume threshold to define adverse market conditions
-    #     "reversion_beta": -0.229, # Factor used to adjust fair value predictions based on past price deviations
-    #     "disregard_edge": 1,
-    #     "join_edge": 0,
-    #     "default_edge": 1,
-    # },
+    Product.KELP: {
+        "take_width": 1,
+        "clear_width": 0,
+        "prevent_adverse": True,  # Flag to prevent taking orders that could lead to adverse price movements
+        "adverse_volume": 15,     # Volume threshold to define adverse market conditions
+        "reversion_beta": -0.229, # Factor used to adjust fair value predictions based on past price deviations
+        "disregard_edge": 1,
+        "join_edge": 0,
+        "default_edge": 1,
+    },
 }
 
 # Trader class encapsulating trading strategies for different products.
@@ -51,7 +51,7 @@ class Trader:
         self.params = params
 
         # Position limits for each product to ensure risk management.
-        self.LIMIT = {Product.RAINFOREST_RESIN: 20, Product.KELP: 20}
+        self.LIMIT = {Product.RAINFOREST_RESIN: 50, Product.KELP: 50}
 
     # This method attempts to "take" the best market orders (i.e., orders already in the book)
     # if they satisfy certain price thresholds relative to the fair value.
