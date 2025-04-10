@@ -269,7 +269,7 @@ class SquidInkStrategy(MarketMakeStrategy):
         self.disregard_edge = 1
         self.join_edge = 2
         self.default_edge = 3
-        self.mean_reversion_alpha = 0.19
+        self.mean_reversion_alpha = 0.17625
 
     def fair_price(self) -> float:
         fair = None
