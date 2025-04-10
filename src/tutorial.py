@@ -25,12 +25,12 @@ class Strategy:
         self.orders.append(Order(self.symbol, price, -quantity))
 
 class MarketMakingStrategy(Strategy):
-    # def __init__(self, symbol: str, limit: int):
-    #     super().__init__(symbol, limit)
-    #     self.window = deque()
-    #     self.window_size = 10
-    #     self.limits_hit = 0
-    #     self.limit_threshold = 5
+    def __init__(self, symbol: str, limit: int):
+        super().__init__(symbol, limit)
+        # self.window = deque()
+        # self.window_size = 10
+        self.limits_hit = 0
+        self.limit_threshold = 5
 
     def get_true_value(self, state: TradingState) -> int:
         raise NotImplementedError
@@ -58,12 +58,12 @@ class MarketMakingStrategy(Strategy):
         max_buy_price = true_value - 1 if position > self.limit * 0.5 else true_value
         min_sell_price = true_value + 1 if position < self.limit * -0.5 else true_value
 
-        # if self.limits_hit >= self.limit_threshold and to_buy > 0:
-        #     # Liquidate position if limit hit
-        #     self.limits_hit = 0
-        #     quantity = to_buy // 2
-        #     self.buy(true_value - 1, quantity)
-        #     to_buy -= quantity
+        if self.limits_hit >= self.limit_threshold and to_buy > 0:
+            # Liquidate position if limit hit
+            self.limits_hit = 0
+            quantity = to_buy // 2
+            self.buy(true_value - 1, quantity)
+            to_buy -= quantity
 
         for price, volume in sell_orders:
             if to_buy > 0 and price <= max_buy_price:   
@@ -71,12 +71,12 @@ class MarketMakingStrategy(Strategy):
                 self.buy(state, price, quantity)
                 to_buy -= quantity
 
-        # if self.limits_hit >= self.limit_threshold and to_sell > 0:
-        #     # Liquidate position if limit hit
-        #     self.limits_hit = 0
-        #     quantity = to_sell // 2
-        #     self.sell(true_value + 1, quantity)
-        #     to_sell -= quantity
+        if self.limits_hit >= self.limit_threshold and to_sell > 0:
+            # Liquidate position if limit hit
+            self.limits_hit = 0
+            quantity = to_sell // 2
+            self.sell(true_value + 1, quantity)
+            to_sell -= quantity
 
         for price, volume in buy_orders:
             if to_sell > 0 and price >= min_sell_price:
@@ -86,7 +86,7 @@ class MarketMakingStrategy(Strategy):
         
 
 class ResinStrategy(MarketMakingStrategy):
-
+    
     def get_true_value(self, state: TradingState) -> int:
         order_depth = state.order_depths[self.symbol]
         buy_orders = sorted(order_depth.buy_orders.items(), reverse=True)
@@ -98,6 +98,38 @@ class ResinStrategy(MarketMakingStrategy):
         mean_price = (mean_buy_price + mean_sell_price) / 2
         return int(mean_price)
 
+
+    
+class KelpStrategy(MarketMakingStrategy):
+    def __init__(self, symbol: str, limit: int):
+        super().__init__(symbol, limit)
+        self.n = 1
+        self.alpha = 1
+        self.ema = 1
+
+    # the value of kelp goes up and down over time
+    # we will use a simple moving average to determine the true value of kelp
+    def get_true_value(self, state: TradingState) -> int:
+        order_depth = state.order_depths[self.symbol]
+        buy_orders = sorted(order_depth.buy_orders.items(), reverse=True)
+        sell_orders = sorted(order_depth.sell_orders.items())
+
+        mean_buy_price = np.mean([price for price, volume in buy_orders])
+        mean_sell_price = np.mean([price for price, volume in sell_orders])
+
+        mean_price = (mean_buy_price + mean_sell_price) // 2
+
+        if (self.n == 1):
+            self.ema = mean_price
+            return int(mean_price)
+
+        self.n += 1
+        self.alpha = 2 / (self.n + 1)
+        self.ema = (self.alpha * mean_price) + ((1 - self.alpha) * self.ema)
+
+        return int(self.ema)
+
+    
 class Trader:
     
     def __init__(self):
@@ -107,7 +139,7 @@ class Trader:
         }
 
         self.strategies = {symbol: constructor(symbol, limits[symbol]) for symbol, constructor in {
-            "RAINFOREST_RESIN" : ResinStrategy,
+            "RAINFOREST_RESIN" : ResinStrategy, "KELP" : KelpStrategy
         }.items()}
 
     def run(self, state : TradingState) -> tuple[dict[Symbol, list[Order]], int , str]:
