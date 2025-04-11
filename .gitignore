@@ -178,3 +178,6 @@ cython_debug/
 
 # data directory
 data/
+
+# logs directory
+backtests/

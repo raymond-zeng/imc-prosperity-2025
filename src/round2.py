@@ -438,164 +438,87 @@ class DjembesStrategy(MarketMakeStrategy):
         self.fair_value = self.fair_price()
         return super().act(state)
 
-class PicnicBasketStrategy(MarketMakeStrategy):
-    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data, components=None, quantities=None):
-        super().__init__(symbol, limit, order_depth, trader_data)
-        self.take_width = 1  # Reduced to be more aggressive
-        self.clear_width = 0
-        self.disregard_edge = 1
-        self.join_edge = 1
-        self.default_edge = 2  # Tighter spreads for more executions
-        self.soft_position_limit = int(limit * 0.85)  # Use more capacity
-        self.manage_position = True
+class BasketIndexTrader:
+    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data, components, quantities):
+        self.symbol = symbol
+        self.limit = limit
+        self.order_depth = order_depth
+        self.trader_data = trader_data
+        self.components = components
+        self.quantities = quantities
         self.fair_value = 0
-        self.components = components or []
-        self.quantities = quantities or []
-        self.arb_threshold = 3  # Lowered threshold for more aggressive arbitrage
-        
-    def fair_price(self, state: TradingState) -> float:
-        fair = None
-        if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
-            best_ask = min(self.order_depth.sell_orders.keys())
-            best_bid = max(self.order_depth.buy_orders.keys())
-            basket_mid_price = (best_ask + best_bid) / 2
-            
-            # Calculate theoretical value from components
-            components_value = 0
-            components_available = True
-            
-            for i, component in enumerate(self.components):
-                if component in state.order_depths:
-                    component_order_depth = state.order_depths[component]
-                    if (len(component_order_depth.sell_orders) != 0 and 
-                        len(component_order_depth.buy_orders) != 0):
-                        comp_best_ask = min(component_order_depth.sell_orders.keys())
-                        comp_best_bid = max(component_order_depth.buy_orders.keys())
-                        comp_mid_price = (comp_best_ask + comp_best_bid) / 2
-                        components_value += comp_mid_price * self.quantities[i]
-                    else:
-                        components_available = False
-                else:
-                    components_available = False
-            
-            if components_available:
-                # Give more weight to the theoretical value for better arbitrage decisions
-                alpha = 0.5  # Equal weight between market and theoretical value
-                fair = alpha * basket_mid_price + (1 - alpha) * components_value
-                
-                # Store arbitrage info with more details for advanced strategies
-                self.trader_data[f"{self.symbol}_components_value"] = components_value
-                self.trader_data[f"{self.symbol}_market_value"] = basket_mid_price
-                self.trader_data[f"{self.symbol}_arb_opportunity"] = components_value - basket_mid_price
-                
-                # Store more granular pricing metrics
-                for i, component in enumerate(self.components):
-                    if component in state.order_depths:
-                        component_order_depth = state.order_depths[component]
-                        if (len(component_order_depth.sell_orders) != 0 and 
-                            len(component_order_depth.buy_orders) != 0):
-                            comp_best_ask = min(component_order_depth.sell_orders.keys())
-                            comp_best_bid = max(component_order_depth.buy_orders.keys())
-                            self.trader_data[f"{self.symbol}_{component}_bid"] = comp_best_bid
-                            self.trader_data[f"{self.symbol}_{component}_ask"] = comp_best_ask
-            else:
-                fair = basket_mid_price
-                
-            # Track price history
-            if f"{self.symbol}_price_history" not in self.trader_data:
-                self.trader_data[f"{self.symbol}_price_history"] = deque(maxlen=100)
-            
-            self.trader_data[f"{self.symbol}_price_history"].append(basket_mid_price)
-            
-        return fair
-    
-    def act(self, state: TradingState):
-        self.fair_value = self.fair_price(state)
-        position = state.position.get(self.symbol, 0)
-        orders = []
-        buy_order_volume = 0
-        sell_order_volume = 0
-        
-        # Check for arbitrage opportunities
-        arb_opportunity = self.trader_data.get(f"{self.symbol}_arb_opportunity", 0)
-        components_value = self.trader_data.get(f"{self.symbol}_components_value", 0)
-        market_value = self.trader_data.get(f"{self.symbol}_market_value", 0)
-        
-        # More aggressive arbitrage with lower threshold
-        if abs(arb_opportunity) > self.arb_threshold:
-            if components_value > market_value:
-                # Basket is underpriced compared to components - buy basket aggressively
-                if len(self.order_depth.sell_orders) > 0:
-                    best_ask = min(self.order_depth.sell_orders.keys())
-                    best_ask_volume = -self.order_depth.sell_orders[best_ask]
-                    available_capacity = self.limit - position
-                    # Take larger quantity for profitable arbitrage
-                    quantity = min(best_ask_volume, available_capacity)
-                    
-                    if quantity > 0:
-                        orders.append(Order(self.symbol, best_ask, quantity))
-                        buy_order_volume += quantity
-                        
-                        # Sweep more levels if still profitable
-                        remaining_capacity = available_capacity - quantity
-                        if remaining_capacity > 0:
-                            ask_prices = sorted(self.order_depth.sell_orders.keys())
-                            for ask_price in ask_prices[1:]:  # Skip the best ask we already took
-                                if ask_price <= components_value - self.arb_threshold:
-                                    ask_volume = -self.order_depth.sell_orders[ask_price]
-                                    sweep_quantity = min(ask_volume, remaining_capacity)
-                                    if sweep_quantity > 0:
-                                        orders.append(Order(self.symbol, ask_price, sweep_quantity))
-                                        buy_order_volume += sweep_quantity
-                                        remaining_capacity -= sweep_quantity
-            else:
-                # Basket is overpriced compared to components - sell basket aggressively
-                if len(self.order_depth.buy_orders) > 0:
-                    best_bid = max(self.order_depth.buy_orders.keys())
-                    best_bid_volume = self.order_depth.buy_orders[best_bid]
-                    available_capacity = self.limit + position
-                    # Take larger quantity for profitable arbitrage
-                    quantity = min(best_bid_volume, available_capacity)
-                    
-                    if quantity > 0:
-                        orders.append(Order(self.symbol, best_bid, -quantity))
-                        sell_order_volume += quantity
-                        
-                        # Sweep more levels if still profitable
-                        remaining_capacity = available_capacity - quantity
-                        if remaining_capacity > 0:
-                            bid_prices = sorted(self.order_depth.buy_orders.keys(), reverse=True)
-                            for bid_price in bid_prices[1:]:  # Skip the best bid we already took
-                                if bid_price >= components_value + self.arb_threshold:
-                                    bid_volume = self.order_depth.buy_orders[bid_price]
-                                    sweep_quantity = min(bid_volume, remaining_capacity)
-                                    if sweep_quantity > 0:
-                                        orders.append(Order(self.symbol, bid_price, -sweep_quantity))
-                                        sell_order_volume += sweep_quantity
-                                        remaining_capacity -= sweep_quantity
-        
-        # For regular market making, use tighter spreads on baskets to improve execution odds
-        take, buy_order_volume, sell_order_volume = self.take_orders(position, buy_order_volume, sell_order_volume)
-        clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
-        make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
-        
-        return orders + take + clear + make
+        self.threshold = 2  # Only trade if basket is mispriced by this much
 
-class PicnicBasket1Strategy(PicnicBasketStrategy):
+    def get_component_value(self, state: TradingState):
+        total = 0
+        for comp, qty in zip(self.components, self.quantities):
+            comp_depth = state.order_depths.get(comp)
+            if comp_depth and comp_depth.sell_orders and comp_depth.buy_orders:
+                best_bid = max(comp_depth.buy_orders)
+                best_ask = min(comp_depth.sell_orders)
+                mid = (best_bid + best_ask) / 2
+                total += qty * mid
+            else:
+                return None  # If any component is missing, skip trading
+        return total
+
+    def act(self, state: TradingState):
+        orders = []
+        position = state.position.get(self.symbol, 0)
+
+        # 1. Compute fair value of basket based on component mids
+        components_value = self.get_component_value(state)
+        if components_value is None:
+            return []  # Can't evaluate, don't trade
+
+        self.fair_value = components_value
+        self.trader_data[f"{self.symbol}_fair_value"] = components_value
+
+        # 2. Check current market prices for the basket
+        sell_orders = self.order_depth.sell_orders
+        buy_orders = self.order_depth.buy_orders
+
+        if sell_orders:
+            best_ask = min(sell_orders)
+            if best_ask < self.fair_value - self.threshold and position < self.limit:
+                volume = min(-sell_orders[best_ask], self.limit - position)
+                orders.append(Order(self.symbol, best_ask, volume))
+
+        if buy_orders:
+            best_bid = max(buy_orders)
+            if best_bid > self.fair_value + self.threshold and position > -self.limit:
+                volume = min(buy_orders[best_bid], self.limit + position)
+                orders.append(Order(self.symbol, best_bid, -volume))
+
+        return orders
+    
+class PicnicBasket1Strategy(BasketIndexTrader):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
         components = ["CROISSANTS", "JAMS", "DJEMBES"]
         quantities = [6, 3, 1]
         super().__init__(symbol, limit, order_depth, trader_data, components, quantities)
-        # More aggressive settings for PICNIC_BASKET1
-        self.take_width = 1
-        self.arb_threshold = 2  # Even more aggressive with PICNIC_BASKET1
-        
-class PicnicBasket2Strategy(PicnicBasketStrategy):
+
+    def act(self, state: TradingState):
+        orders = super().act(state)
+        # Adjust orders for the Picnic Basket 1 strategy
+        for order in orders:
+            if order.symbol == "PICNIC_BASKET1":
+                order.price = round(order.price * 0.95)
+        return orders
+    
+class PicnicBasket2Strategy(BasketIndexTrader):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
         components = ["CROISSANTS", "JAMS"]
         quantities = [4, 2]
         super().__init__(symbol, limit, order_depth, trader_data, components, quantities)
-        self.arb_threshold = 2  # More aggressive arbitrage
+
+    def act(self, state: TradingState):
+        orders = super().act(state)
+        # Adjust orders for the Picnic Basket 2 strategy
+        for order in orders:
+            if order.symbol == "PICNIC_BASKET2":
+                order.price = round(order.price * 0.95)
+        return orders
 
         
 class Trader:
@@ -611,124 +534,6 @@ class Trader:
             "PICNIC_BASKET1": 60,
             "PICNIC_BASKET2": 100
         }
-        self.conversions_available = {
-            "PICNIC_BASKET1": {"components": {"CROISSANTS": 6, "JAMS": 3, "DJEMBES": 1}, "result": 1},
-            "PICNIC_BASKET2": {"components": {"CROISSANTS": 4, "JAMS": 2}, "result": 1}
-        }
-        self.conversion_cooldown = 0
-
-    def check_conversion_possibility(self, state: TradingState, symbol: str, direction: str) -> int:
-        """
-        Check if conversion is possible for a given symbol and direction.
-        Returns the maximum number of conversions possible.
-        """
-        if symbol not in self.conversions_available or self.conversion_cooldown > 0:
-            return 0
-
-        conversion_info = self.conversions_available[symbol]
-        components = conversion_info["components"]
-        result_qty = conversion_info["result"]
-        
-        if direction == "TO_BASKET":
-            # Check if we have enough components to make baskets
-            max_conversions = float('inf')
-            for component, qty_needed in components.items():
-                position = state.position.get(component, 0)
-                if position < qty_needed:
-                    return 0  # Not enough of this component
-                max_conversions = min(max_conversions, position // qty_needed)
-            
-            # Check if we have room for the resulting baskets
-            basket_position = state.position.get(symbol, 0)
-            basket_limit = self.limits[symbol]
-            basket_capacity = basket_limit - basket_position
-            max_conversions = min(max_conversions, basket_capacity // result_qty)
-            
-            return max_conversions
-            
-        elif direction == "FROM_BASKET":
-            # Check if we have enough baskets to break down
-            basket_position = state.position.get(symbol, 0)
-            if basket_position <= 0:
-                return 0
-            
-            max_conversions = basket_position // result_qty
-            
-            # Check if we have room for the resulting components
-            for component, qty_result in components.items():
-                position = state.position.get(component, 0)
-                component_limit = self.limits[component]
-                component_capacity = component_limit - position
-                if component_capacity < qty_result:
-                    return 0  # Not enough capacity for this component
-                max_conversions = min(max_conversions, component_capacity // qty_result)
-            
-            return max_conversions
-        
-        return 0
-
-    def execute_conversion(self, state: TradingState, basket: str, direction: str) -> int:
-        """
-        Execute the conversion and return the number of conversions performed.
-        """
-        if self.conversion_cooldown > 0:
-            self.conversion_cooldown -= 1
-            return 0
-            
-        max_conversions = self.check_conversion_possibility(state, basket, direction)
-        if max_conversions <= 0:
-            return 0
-            
-        # Set cooldown to prevent too frequent conversions
-        self.conversion_cooldown = 3
-        return max_conversions
-
-    def check_basket_arbitrage(self, state: TradingState, basket: str) -> tuple[str, float]:
-        """
-        Check if there's an arbitrage opportunity with this basket.
-        Returns the direction and the price difference.
-        """
-        if basket not in self.conversions_available:
-            return None, 0
-            
-        conversion_info = self.conversions_available[basket]
-        components = conversion_info["components"]
-        
-        # Calculate the cost of the components
-        component_cost = 0
-        for component, qty in components.items():
-            if component not in state.order_depths:
-                return None, 0
-                
-            component_depth = state.order_depths[component]
-            if not component_depth.sell_orders or not component_depth.buy_orders:
-                return None, 0
-                
-            # Use mid price for component valuation
-            component_mid = (min(component_depth.sell_orders.keys()) + 
-                            max(component_depth.buy_orders.keys())) / 2
-            component_cost += component_mid * qty
-        
-        # Get the basket price
-        if basket not in state.order_depths:
-            return None, 0
-            
-        basket_depth = state.order_depths[basket]
-        if not basket_depth.sell_orders or not basket_depth.buy_orders:
-            return None, 0
-            
-        basket_mid = (min(basket_depth.sell_orders.keys()) + 
-                    max(basket_depth.buy_orders.keys())) / 2
-        
-        # Calculate the price difference
-        diff = basket_mid - component_cost
-        
-        if diff > 5:  # Threshold for arbitrage
-            return "FROM_BASKET", diff  # Sell basket, buy components
-        elif diff < -5:  # Threshold for arbitrage
-            return "TO_BASKET", -diff   # Buy basket, sell components
-            
-        return None, 0
 
     def run(self, state : TradingState) -> tuple[dict[Symbol, list[Order]], int , str]:
         trader_data = {}
@@ -738,8 +543,8 @@ class Trader:
             "RAINFOREST_RESIN" : ResinStrategy, "KELP" : KelpStrategy, "SQUID_INK" : SquidInkStrategy, "CROISSANTS" : CroissantsStrategy,
             "JAMS" : JamsStrategy, "DJEMBES" : DjembesStrategy, "PICNIC_BASKET1" : PicnicBasket1Strategy, "PICNIC_BASKET2" : PicnicBasket2Strategy
         }.items()}
-        conversions = 0
         orders = {}
+        conversions = 0
         for symbol, strategy in strategies.items():
             if symbol in state.order_depths:
                 orders[symbol] = strategy.act(state)
