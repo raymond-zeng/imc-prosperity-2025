@@ -4,6 +4,8 @@ import numpy as np
 import math
 from collections import deque
 
+# f = open("test.txt", "w")
+
 class MarketMakeStrategy():
 
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
@@ -336,107 +338,107 @@ class SquidInkStrategy(MarketMakeStrategy):
         return orders + clear + make
 
 # New strategies for Round 2 products
-class CroissantsStrategy(MarketMakeStrategy):
-    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
-        super().__init__(symbol, limit, order_depth, trader_data)
-        self.take_width = 1
-        self.clear_width = 0
-        self.disregard_edge = 1
-        self.join_edge = 1
-        self.default_edge = 2
-        self.soft_position_limit = 150
-        self.manage_position = True
-        self.fair_value = 0
+# class CroissantsStrategy(MarketMakeStrategy):
+#     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
+#         super().__init__(symbol, limit, order_depth, trader_data)
+#         self.take_width = 1
+#         self.clear_width = 0
+#         self.disregard_edge = 1
+#         self.join_edge = 1
+#         self.default_edge = 2
+#         self.soft_position_limit = 150
+#         self.manage_position = True
+#         self.fair_value = 0
         
-    def fair_price(self) -> float:
-        fair = None
-        if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
-            best_ask = min(self.order_depth.sell_orders.keys())
-            best_bid = max(self.order_depth.buy_orders.keys())
-            mid_price = (best_ask + best_bid) / 2
+#     def fair_price(self) -> float:
+#         fair = None
+#         if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
+#             best_ask = min(self.order_depth.sell_orders.keys())
+#             best_bid = max(self.order_depth.buy_orders.keys())
+#             mid_price = (best_ask + best_bid) / 2
             
-            # Use simple midpoint as fair value
-            fair = mid_price
+#             # Use simple midpoint as fair value
+#             fair = mid_price
             
-            # Track price history for potential mean reversion
-            if "CROISSANTS_price_history" not in self.trader_data:
-                self.trader_data["CROISSANTS_price_history"] = deque(maxlen=100)
+#             # Track price history for potential mean reversion
+#             if "CROISSANTS_price_history" not in self.trader_data:
+#                 self.trader_data["CROISSANTS_price_history"] = deque(maxlen=100)
             
-            self.trader_data["CROISSANTS_price_history"].append(mid_price)
+#             self.trader_data["CROISSANTS_price_history"].append(mid_price)
             
-        return fair
+#         return fair
     
-    def act(self, state: TradingState):
-        self.fair_value = self.fair_price()
-        return super().act(state)
+#     def act(self, state: TradingState):
+#         self.fair_value = self.fair_price()
+#         return super().act(state)
 
-class JamsStrategy(MarketMakeStrategy):
-    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
-        super().__init__(symbol, limit, order_depth, trader_data)
-        self.take_width = 1
-        self.clear_width = 0
-        self.disregard_edge = 1
-        self.join_edge = 1
-        self.default_edge = 2
-        self.soft_position_limit = 200
-        self.manage_position = True
-        self.fair_value = 0
+# class JamsStrategy(MarketMakeStrategy):
+#     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
+#         super().__init__(symbol, limit, order_depth, trader_data)
+#         self.take_width = 1
+#         self.clear_width = 0
+#         self.disregard_edge = 1
+#         self.join_edge = 1
+#         self.default_edge = 2
+#         self.soft_position_limit = 200
+#         self.manage_position = True
+#         self.fair_value = 0
         
-    def fair_price(self) -> float:
-        fair = None
-        if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
-            best_ask = min(self.order_depth.sell_orders.keys())
-            best_bid = max(self.order_depth.buy_orders.keys())
-            mid_price = (best_ask + best_bid) / 2
+#     def fair_price(self) -> float:
+#         fair = None
+#         if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
+#             best_ask = min(self.order_depth.sell_orders.keys())
+#             best_bid = max(self.order_depth.buy_orders.keys())
+#             mid_price = (best_ask + best_bid) / 2
             
-            # Use simple midpoint as fair value
-            fair = mid_price
+#             # Use simple midpoint as fair value
+#             fair = mid_price
             
-            # Track price history for potential mean reversion
-            if "JAMS_price_history" not in self.trader_data:
-                self.trader_data["JAMS_price_history"] = deque(maxlen=100)
+#             # Track price history for potential mean reversion
+#             if "JAMS_price_history" not in self.trader_data:
+#                 self.trader_data["JAMS_price_history"] = deque(maxlen=100)
             
-            self.trader_data["JAMS_price_history"].append(mid_price)
+#             self.trader_data["JAMS_price_history"].append(mid_price)
             
-        return fair
+#         return fair
     
-    def act(self, state: TradingState):
-        self.fair_value = self.fair_price()
-        return super().act(state)
+#     def act(self, state: TradingState):
+#         self.fair_value = self.fair_price()
+#         return super().act(state)
 
-class DjembesStrategy(MarketMakeStrategy):
-    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
-        super().__init__(symbol, limit, order_depth, trader_data)
-        self.take_width = 2
-        self.clear_width = 1
-        self.disregard_edge = 1
-        self.join_edge = 1
-        self.default_edge = 3
-        self.soft_position_limit = 30
-        self.manage_position = True
-        self.fair_value = 0
+# class DjembesStrategy(MarketMakeStrategy):
+#     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
+#         super().__init__(symbol, limit, order_depth, trader_data)
+#         self.take_width = 2
+#         self.clear_width = 1
+#         self.disregard_edge = 1
+#         self.join_edge = 1
+#         self.default_edge = 3
+#         self.soft_position_limit = 30
+#         self.manage_position = True
+#         self.fair_value = 0
         
-    def fair_price(self) -> float:
-        fair = None
-        if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
-            best_ask = min(self.order_depth.sell_orders.keys())
-            best_bid = max(self.order_depth.buy_orders.keys())
-            mid_price = (best_ask + best_bid) / 2
+#     def fair_price(self) -> float:
+#         fair = None
+#         if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
+#             best_ask = min(self.order_depth.sell_orders.keys())
+#             best_bid = max(self.order_depth.buy_orders.keys())
+#             mid_price = (best_ask + best_bid) / 2
             
-            # Use simple midpoint as fair value
-            fair = mid_price
+#             # Use simple midpoint as fair value
+#             fair = mid_price
             
-            # Track price history for potential mean reversion
-            if "DJEMBES_price_history" not in self.trader_data:
-                self.trader_data["DJEMBES_price_history"] = deque(maxlen=100)
+#             # Track price history for potential mean reversion
+#             if "DJEMBES_price_history" not in self.trader_data:
+#                 self.trader_data["DJEMBES_price_history"] = deque(maxlen=100)
             
-            self.trader_data["DJEMBES_price_history"].append(mid_price)
+#             self.trader_data["DJEMBES_price_history"].append(mid_price)
             
-        return fair
+#         return fair
     
-    def act(self, state: TradingState):
-        self.fair_value = self.fair_price()
-        return super().act(state)
+#     def act(self, state: TradingState):
+#         self.fair_value = self.fair_price()
+#         return super().act(state)
 
 class PicnicBasketStrategy(MarketMakeStrategy):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data, components=None, quantities=None):
@@ -480,7 +482,7 @@ class PicnicBasketStrategy(MarketMakeStrategy):
             
             if components_available:
                 # Give more weight to the theoretical value for better arbitrage decisions
-                alpha = 0.5  # Equal weight between market and theoretical value
+                alpha = 0.8  # Equal weight between market and theoretical value
                 fair = alpha * basket_mid_price + (1 - alpha) * components_value
                 
                 # Store arbitrage info with more details for advanced strategies
@@ -586,17 +588,293 @@ class PicnicBasket1Strategy(PicnicBasketStrategy):
         components = ["CROISSANTS", "JAMS", "DJEMBES"]
         quantities = [6, 3, 1]
         super().__init__(symbol, limit, order_depth, trader_data, components, quantities)
-        # More aggressive settings for PICNIC_BASKET1
+        # Parameters optimized for component-based mean reversion
         self.take_width = 1
-        self.arb_threshold = 2  # Even more aggressive with PICNIC_BASKET1
+        self.clear_width = 0
+        self.disregard_edge = 1
+        self.join_edge = 1
+        self.default_edge = 2
+        self.arb_threshold = 1  # Tighter threshold for more aggressive mean reversion
+        self.component_reversion_strength = 0.4  # How strongly to revert to component value
+        self.prevent_adverse = True
+        self.adverse_volume = 15  # Avoid thin liquidity
+        self.soft_position_limit = int(self.limit * 0.85)
         
-class PicnicBasket2Strategy(PicnicBasketStrategy):
-    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
-        components = ["CROISSANTS", "JAMS"]
-        quantities = [4, 2]
-        super().__init__(symbol, limit, order_depth, trader_data, components, quantities)
-        self.arb_threshold = 2  # More aggressive arbitrage
-
+    def fair_price(self, state: TradingState) -> float:
+        if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
+            best_ask = min(self.order_depth.sell_orders.keys())
+            best_bid = max(self.order_depth.buy_orders.keys())
+            basket_mid_price = (best_ask + best_bid) / 2
+            
+            # Calculate theoretical value from components
+            components_value = 0
+            components_available = True
+            
+            for i, component in enumerate(self.components):
+                if component in state.order_depths:
+                    component_order_depth = state.order_depths[component]
+                    if (len(component_order_depth.sell_orders) != 0 and 
+                        len(component_order_depth.buy_orders) != 0):
+                        comp_best_ask = min(component_order_depth.sell_orders.keys())
+                        comp_best_bid = max(component_order_depth.buy_orders.keys())
+                        comp_mid_price = (comp_best_ask + comp_best_bid) / 2
+                        components_value += comp_mid_price * self.quantities[i]
+                    else:
+                        components_available = False
+                else:
+                    components_available = False
+            
+            # Track and update price history
+            if f"{self.symbol}_price_history" not in self.trader_data:
+                self.trader_data[f"{self.symbol}_price_history"] = deque(maxlen=100)
+            self.trader_data[f"{self.symbol}_price_history"].append(basket_mid_price)
+            
+            # Calculate price deviation from theoretical component value
+            if components_available:
+                # Store raw deviation
+                raw_deviation = basket_mid_price - components_value
+                self.trader_data[f"{self.symbol}_raw_deviation"] = raw_deviation
+                
+                # Calculate percentage deviation (relative to component value)
+                pct_deviation = (basket_mid_price - components_value) / components_value if components_value != 0 else 0
+                self.trader_data[f"{self.symbol}_pct_deviation"] = pct_deviation
+                
+                # Keep history of percentage deviations for statistical analysis
+                if f"{self.symbol}_pct_deviation_history" not in self.trader_data:
+                    self.trader_data[f"{self.symbol}_pct_deviation_history"] = deque(maxlen=50)
+                self.trader_data[f"{self.symbol}_pct_deviation_history"].append(pct_deviation)
+                
+                # Calculate custom statistics (mean and standard deviation)
+                deviation_history = list(self.trader_data[f"{self.symbol}_pct_deviation_history"])
+                if len(deviation_history) > 5:  # Need enough data for meaningful statistics
+                    # Custom mean calculation
+                    mean_deviation = sum(deviation_history) / len(deviation_history)
+                    
+                    # Custom standard deviation calculation
+                    squared_diffs = [(x - mean_deviation) ** 2 for x in deviation_history]
+                    variance = sum(squared_diffs) / len(squared_diffs)
+                    std_deviation = max(0.0001, variance ** 0.5)  # sqrt of variance, with minimum value
+                    
+                    # Calculate z-score (how many standard deviations from mean)
+                    z_score = (pct_deviation - mean_deviation) / std_deviation
+                    self.trader_data[f"{self.symbol}_z_score"] = z_score
+                    
+                    # Use z-score for more consistent threshold adjustments
+                    if abs(z_score) > 2.0:  # Very significant deviation (>2 standard deviations)
+                        # For large statistical deviations, increase reversion strength
+                        self.component_reversion_strength = 0.5
+                        self.arb_threshold = 0.001  # Almost any deviation is worth trading
+                        self.take_width = 0  # Extremely aggressive, take at fair value
+                    elif abs(z_score) > 1.0:  # Moderate deviation (1-2 standard deviations)
+                        self.component_reversion_strength = 0.4
+                        self.arb_threshold = 0.002  # Small percentage threshold
+                        self.take_width = 1
+                    else:  # Small deviation (<1 standard deviation)
+                        # For small deviations, normal settings
+                        self.component_reversion_strength = 0.3
+                        self.arb_threshold = 0.004  # Higher percentage threshold
+                        self.take_width = 1
+                        
+                    # Use percentage deviation for trading decisions
+                    self.trader_data[f"{self.symbol}_deviation"] = pct_deviation
+                    
+                    # Adjust spread based on z-score - wider when close to mean
+                    self.default_edge = max(1, min(3, int(4 - abs(z_score))))
+                    
+                    # f.write(f"Z-score: {z_score}, Pct Dev: {pct_deviation}, Threshold: {self.arb_threshold}\n")
+                    
+                else:
+                    # Not enough history yet, use basic percentage-based approach
+                    if abs(pct_deviation) > 0.01:  # 1% deviation
+                        self.component_reversion_strength = 0.5
+                        self.arb_threshold = 0.005
+                        self.take_width = 0
+                    elif abs(pct_deviation) > 0.005:  # 0.5% deviation
+                        self.component_reversion_strength = 0.4
+                        self.arb_threshold = 0.002
+                        self.take_width = 1
+                    else:
+                        self.component_reversion_strength = 0.3
+                        self.arb_threshold = 0.001
+                        self.take_width = 1
+                        
+                    # Use percentage deviation for trading decisions
+                    self.trader_data[f"{self.symbol}_deviation"] = pct_deviation
+                    
+                    # Adjust spread based on percentage deviation
+                    self.default_edge = max(1, min(3, int(4 - abs(pct_deviation) * 200)))
+                    
+                    # f.write(f"Pct Dev: {pct_deviation}, Threshold: {self.arb_threshold}\n")
+                
+                # Make fair value calculations based on appropriate measurements
+                # Always use raw deviation for price adjustment to get correct absolute values
+                fair = basket_mid_price - (raw_deviation * self.component_reversion_strength)
+                
+                # Store other data for market making and position management
+                self.trader_data[f"{self.symbol}_components_value"] = components_value
+                self.trader_data[f"{self.symbol}_market_value"] = basket_mid_price
+                
+                # Store component prices for analysis
+                for i, component in enumerate(self.components):
+                    if component in state.order_depths:
+                        component_order_depth = state.order_depths[component]
+                        if (len(component_order_depth.sell_orders) != 0 and 
+                            len(component_order_depth.buy_orders) != 0):
+                            comp_best_ask = min(component_order_depth.sell_orders.keys())
+                            comp_best_bid = max(component_order_depth.buy_orders.keys())
+                            self.trader_data[f"{self.symbol}_{component}_bid"] = comp_best_bid
+                            self.trader_data[f"{self.symbol}_{component}_ask"] = comp_best_ask
+            else:
+                # If components aren't available, use simple mid price
+                fair = basket_mid_price
+                
+            return fair
+        return None
+        
+    def act(self, state: TradingState):
+        self.fair_value = self.fair_price(state)
+        if self.fair_value is None:
+            # Fall back to simple market making if pricing data is missing
+            position = state.position.get(self.symbol, 0)
+            take, buy_order_volume, sell_order_volume = self.take_orders(position, 0, 0)
+            clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
+            make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
+            return take + clear + make
+            
+        position = state.position.get(self.symbol, 0)
+        orders = []
+        buy_order_volume = 0
+        sell_order_volume = 0
+        
+        # Get correct deviation metric for trading decisions based on statistical models
+        deviation = self.trader_data.get(f"{self.symbol}_deviation", 0)
+        components_value = self.trader_data.get(f"{self.symbol}_components_value", 0)
+        market_value = self.trader_data.get(f"{self.symbol}_market_value", 0)
+        z_score = self.trader_data.get(f"{self.symbol}_z_score", 0)
+        
+        # Position-aware sizing - adjust position limit dynamically
+        position_ratio = abs(position) / self.limit
+        position_factor = max(0.4, 1.0 - position_ratio)
+        
+        # Adjust strategy based on position direction
+        direction_factor = 1.0
+        if (deviation > 0 and position < 0) or (deviation < 0 and position > 0):
+            # Already have position in the right direction - be less aggressive
+            direction_factor = 0.7
+        
+        # If basket price deviates from component value, trade to profit from reversion
+        if abs(deviation) > self.arb_threshold:
+            if deviation > 0:  # Basket overpriced vs components - SELL
+                if len(self.order_depth.buy_orders) > 0:
+                    best_bid = max(self.order_depth.buy_orders.keys())
+                    best_bid_volume = self.order_depth.buy_orders[best_bid]
+                    available_capacity = self.limit + position
+                    
+                    # More adaptive sizing based on deviation magnitude, position, and direction
+                    base_sizing = min(0.9, 0.5 + (abs(deviation) * 50))  # Scale percentage deviation
+                    sizing_factor = base_sizing * position_factor * direction_factor
+                    
+                    quantity = min(best_bid_volume, int(available_capacity * sizing_factor))
+                    
+                    if quantity > 0:
+                        orders.append(Order(self.symbol, best_bid, -quantity))
+                        sell_order_volume += quantity
+                        
+                        # Sweep additional levels with more intelligent logic
+                        if available_capacity - quantity > 0:
+                            # Dynamic level determination based on z-score
+                            sweep_levels = min(3, max(1, round(abs(z_score))))
+                            remaining_capacity = available_capacity - quantity
+                            bid_prices = sorted(self.order_depth.buy_orders.keys(), reverse=True)
+                            
+                            # Calculate sweep threshold based on percentage deviation
+                            if abs(deviation) > 0.01:  # >1% deviation
+                                sweep_threshold = components_value * (1 + self.arb_threshold)
+                            else:
+                                # For smaller deviations, be more conservative
+                                sweep_threshold = components_value * (1 + self.arb_threshold * 1.5)
+                            
+                            levels_swept = 0
+                            for bid_price in bid_prices[1:]:  # Skip best bid we already took
+                                if levels_swept >= sweep_levels:
+                                    break
+                                    
+                                if bid_price >= sweep_threshold:
+                                    bid_volume = self.order_depth.buy_orders[bid_price]
+                                    # Reduce size for each level deeper in the book
+                                    level_factor = 0.8 ** (levels_swept + 1)
+                                    sweep_quantity = min(bid_volume, 
+                                                        int(remaining_capacity * sizing_factor * level_factor))
+                                    
+                                    if sweep_quantity > 0:
+                                        orders.append(Order(self.symbol, bid_price, -sweep_quantity))
+                                        sell_order_volume += sweep_quantity
+                                        remaining_capacity -= sweep_quantity
+                                        levels_swept += 1
+            
+            else:  # Basket underpriced vs components - BUY
+                if len(self.order_depth.sell_orders) > 0:
+                    best_ask = min(self.order_depth.sell_orders.keys())
+                    best_ask_volume = -self.order_depth.sell_orders[best_ask]
+                    available_capacity = self.limit - position
+                    
+                    # More adaptive sizing based on deviation magnitude, position, and direction
+                    base_sizing = min(0.9, 0.5 + (abs(deviation) * 50))  # Scale percentage deviation
+                    sizing_factor = base_sizing * position_factor * direction_factor
+                    
+                    quantity = min(best_ask_volume, int(available_capacity * sizing_factor))
+                    
+                    if quantity > 0:
+                        orders.append(Order(self.symbol, best_ask, quantity))
+                        buy_order_volume += quantity
+                        
+                        # Sweep additional levels with more intelligent logic
+                        if available_capacity - quantity > 0:
+                            # Dynamic level determination based on z-score
+                            sweep_levels = min(3, max(1, round(abs(z_score))))
+                            remaining_capacity = available_capacity - quantity
+                            ask_prices = sorted(self.order_depth.sell_orders.keys())
+                            
+                            # Calculate sweep threshold based on percentage deviation
+                            if abs(deviation) > 0.01:  # >1% deviation
+                                sweep_threshold = components_value * (1 - self.arb_threshold)
+                            else:
+                                # For smaller deviations, be more conservative
+                                sweep_threshold = components_value * (1 - self.arb_threshold * 1.5)
+                            
+                            levels_swept = 0
+                            for ask_price in ask_prices[1:]:  # Skip best ask we already took
+                                if levels_swept >= sweep_levels:
+                                    break
+                                    
+                                if ask_price <= sweep_threshold:
+                                    ask_volume = -self.order_depth.sell_orders[ask_price]
+                                    # Reduce size for each level deeper in the book
+                                    level_factor = 0.8 ** (levels_swept + 1)
+                                    sweep_quantity = min(ask_volume, 
+                                                        int(remaining_capacity * sizing_factor * level_factor))
+                                    
+                                    if sweep_quantity > 0:
+                                        orders.append(Order(self.symbol, ask_price, sweep_quantity))
+                                        buy_order_volume += sweep_quantity
+                                        remaining_capacity -= sweep_quantity
+                                        levels_swept += 1
+        
+        # Position management through market making
+        if abs(position) > self.soft_position_limit * 0.7:
+            if position > 0:
+                # With large long position, tighten ask to sell more
+                self.default_edge = max(1, self.default_edge - 1)
+            else:
+                # With large short position, tighten bid to buy more
+                self.default_edge = max(1, self.default_edge - 1)
+        
+        # Standard market making layers with adaptive parameters
+        take, buy_order_volume, sell_order_volume = self.take_orders(position, buy_order_volume, sell_order_volume)
+        clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
+        make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
+        
+        return orders + take + clear + make
         
 class Trader:
 
@@ -611,133 +889,16 @@ class Trader:
             "PICNIC_BASKET1": 60,
             "PICNIC_BASKET2": 100
         }
-        self.conversions_available = {
-            "PICNIC_BASKET1": {"components": {"CROISSANTS": 6, "JAMS": 3, "DJEMBES": 1}, "result": 1},
-            "PICNIC_BASKET2": {"components": {"CROISSANTS": 4, "JAMS": 2}, "result": 1}
-        }
-        self.conversion_cooldown = 0
 
-    def check_conversion_possibility(self, state: TradingState, symbol: str, direction: str) -> int:
-        """
-        Check if conversion is possible for a given symbol and direction.
-        Returns the maximum number of conversions possible.
-        """
-        if symbol not in self.conversions_available or self.conversion_cooldown > 0:
-            return 0
 
-        conversion_info = self.conversions_available[symbol]
-        components = conversion_info["components"]
-        result_qty = conversion_info["result"]
-        
-        if direction == "TO_BASKET":
-            # Check if we have enough components to make baskets
-            max_conversions = float('inf')
-            for component, qty_needed in components.items():
-                position = state.position.get(component, 0)
-                if position < qty_needed:
-                    return 0  # Not enough of this component
-                max_conversions = min(max_conversions, position // qty_needed)
-            
-            # Check if we have room for the resulting baskets
-            basket_position = state.position.get(symbol, 0)
-            basket_limit = self.limits[symbol]
-            basket_capacity = basket_limit - basket_position
-            max_conversions = min(max_conversions, basket_capacity // result_qty)
-            
-            return max_conversions
-            
-        elif direction == "FROM_BASKET":
-            # Check if we have enough baskets to break down
-            basket_position = state.position.get(symbol, 0)
-            if basket_position <= 0:
-                return 0
-            
-            max_conversions = basket_position // result_qty
-            
-            # Check if we have room for the resulting components
-            for component, qty_result in components.items():
-                position = state.position.get(component, 0)
-                component_limit = self.limits[component]
-                component_capacity = component_limit - position
-                if component_capacity < qty_result:
-                    return 0  # Not enough capacity for this component
-                max_conversions = min(max_conversions, component_capacity // qty_result)
-            
-            return max_conversions
-        
-        return 0
-
-    def execute_conversion(self, state: TradingState, basket: str, direction: str) -> int:
-        """
-        Execute the conversion and return the number of conversions performed.
-        """
-        if self.conversion_cooldown > 0:
-            self.conversion_cooldown -= 1
-            return 0
-            
-        max_conversions = self.check_conversion_possibility(state, basket, direction)
-        if max_conversions <= 0:
-            return 0
-            
-        # Set cooldown to prevent too frequent conversions
-        self.conversion_cooldown = 3
-        return max_conversions
-
-    def check_basket_arbitrage(self, state: TradingState, basket: str) -> tuple[str, float]:
-        """
-        Check if there's an arbitrage opportunity with this basket.
-        Returns the direction and the price difference.
-        """
-        if basket not in self.conversions_available:
-            return None, 0
-            
-        conversion_info = self.conversions_available[basket]
-        components = conversion_info["components"]
-        
-        # Calculate the cost of the components
-        component_cost = 0
-        for component, qty in components.items():
-            if component not in state.order_depths:
-                return None, 0
-                
-            component_depth = state.order_depths[component]
-            if not component_depth.sell_orders or not component_depth.buy_orders:
-                return None, 0
-                
-            # Use mid price for component valuation
-            component_mid = (min(component_depth.sell_orders.keys()) + 
-                            max(component_depth.buy_orders.keys())) / 2
-            component_cost += component_mid * qty
-        
-        # Get the basket price
-        if basket not in state.order_depths:
-            return None, 0
-            
-        basket_depth = state.order_depths[basket]
-        if not basket_depth.sell_orders or not basket_depth.buy_orders:
-            return None, 0
-            
-        basket_mid = (min(basket_depth.sell_orders.keys()) + 
-                    max(basket_depth.buy_orders.keys())) / 2
-        
-        # Calculate the price difference
-        diff = basket_mid - component_cost
-        
-        if diff > 5:  # Threshold for arbitrage
-            return "FROM_BASKET", diff  # Sell basket, buy components
-        elif diff < -5:  # Threshold for arbitrage
-            return "TO_BASKET", -diff   # Buy basket, sell components
-            
-        return None, 0
 
     def run(self, state : TradingState) -> tuple[dict[Symbol, list[Order]], int , str]:
         trader_data = {}
         if state.traderData != None and state.traderData != "":
             trader_data = jsonpickle.decode(state.traderData)
         strategies = {symbol: constructor(symbol, self.limits[symbol], state.order_depths[symbol], trader_data) for symbol, constructor in {
-            "RAINFOREST_RESIN" : ResinStrategy, "KELP" : KelpStrategy, "SQUID_INK" : SquidInkStrategy, "CROISSANTS" : CroissantsStrategy,
-            "JAMS" : JamsStrategy, "DJEMBES" : DjembesStrategy, "PICNIC_BASKET1" : PicnicBasket1Strategy, "PICNIC_BASKET2" : PicnicBasket2Strategy
-        }.items()}
+            "RAINFOREST_RESIN" : ResinStrategy, "KELP" : KelpStrategy, "SQUID_INK" : SquidInkStrategy,
+            "PICNIC_BASKET1": PicnicBasket1Strategy}.items()}
         conversions = 0
         orders = {}
         for symbol, strategy in strategies.items():
