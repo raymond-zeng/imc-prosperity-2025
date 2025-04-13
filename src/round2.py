@@ -147,16 +147,27 @@ class MarketMakeStrategy():
         raise NotImplementedError
 
     def market_make(self, orders: list[Order], bid: int, ask: int, position: int, buy_order_volume: int, 
-                    sell_order_volume: int) -> tuple[int, int]:
-        # Calculate available capacity to buy based on current position and order volume.
-        buy_quantity = self.limit - (position + buy_order_volume)
+                sell_order_volume: int) -> tuple[int, int]:
+        # Scale order sizes based on position
+        position_ratio = abs(position) / self.limit
+        scaling_factor = max(0.2, 1.0 - position_ratio)
+        
+        # Calculate available capacity to buy
+        max_buy_qty = self.limit - (position + buy_order_volume)
+        # Scale down order size as we approach limit
+        buy_quantity = min(max_buy_qty, max(1, int(self.limit * 0.25 * scaling_factor)))
         if buy_quantity > 0:
             orders.append(Order(self.symbol, round(bid), buy_quantity))
+            buy_order_volume += buy_quantity
         
-        # Calculate available capacity to sell.
-        sell_quantity = self.limit + (position - sell_order_volume)
+        # Calculate available capacity to sell
+        max_sell_qty = self.limit + (position - sell_order_volume)
+        # Scale down order size as we approach limit
+        sell_quantity = min(max_sell_qty, max(1, int(self.limit * 0.25 * scaling_factor)))
         if sell_quantity > 0:
             orders.append(Order(self.symbol, round(ask), -sell_quantity))  
+            sell_order_volume += sell_quantity
+            
         return buy_order_volume, sell_order_volume
 
 
@@ -256,7 +267,15 @@ class MarketMakeStrategy():
     def make_orders(self, position, buy_order_volume: int, sell_order_volume: int) -> tuple[list[Order], int, int]:
         orders = []
 
-        # Identify asks that are placed above fair value and bids below, but only those beyond the disregard threshold.
+        # Calculate remaining capacity based on position and orders already placed
+        remaining_buy_capacity = self.limit - (position + buy_order_volume)
+        remaining_sell_capacity = self.limit + (position - sell_order_volume)
+        
+        # Position management - reduce order sizes as limits are approached
+        position_ratio = abs(position) / self.limit
+        scaling_factor = max(0.2, 1.0 - position_ratio)
+        
+        # Identify asks and bids beyond disregard threshold
         asks_above_fair = [
             price
             for price in self.order_depth.sell_orders.keys()
@@ -268,47 +287,56 @@ class MarketMakeStrategy():
             if price < self.fair_value - self.disregard_edge
         ]
 
-        # Determine the best ask above fair value, if any exist.
         best_ask_above_fair = min(asks_above_fair) if len(asks_above_fair) > 0 else None
-        # Determine the best bid below fair value, if any exist.
         best_bid_below_fair = max(bids_below_fair) if len(bids_below_fair) > 0 else None
 
-        # Initialize ask using the default edge.
+        # Initialize ask and bid with default edge
         ask = round(self.fair_value + self.default_edge)
         if best_ask_above_fair != None:
-            # If the best ask is close enough (within join_edge), join at that price.
             if abs(best_ask_above_fair - self.fair_value) <= self.join_edge:
                 ask = best_ask_above_fair  # Join the level
             else:
-                ask = best_ask_above_fair - 1  # Undercut by one unit (penny) to improve likelihood of execution
+                ask = best_ask_above_fair - 1  # Undercut by one unit
 
-        # Similarly, initialize bid using default_edge.
         bid = round(self.fair_value - self.default_edge)
         if best_bid_below_fair != None:
             if abs(self.fair_value - best_bid_below_fair) <= self.join_edge:
                 bid = best_bid_below_fair  # Join the level
             else:
-                bid = best_bid_below_fair + 1  # Penny by raising the bid slightly
+                bid = best_bid_below_fair + 1  # Raise bid slightly
 
-        # If managing position risk, adjust orders to favor reducing an extreme position.
-        if self.manage_position:
-            if position > self.soft_position_limit:
-                ask -= 1  # Slightly lower the ask to encourage selling
-            elif position < -1 * self.soft_position_limit:
-                bid += 1  # Slightly raise the bid to encourage buying
+        # Position-based price adjustments
+        if position > self.soft_position_limit * 0.7:
+            ask = max(bid + 1, ask - 1)  # Tighten ask to encourage selling
+        elif position < -1 * self.soft_position_limit * 0.7:
+            bid = min(ask - 1, bid + 1)  # Tighten bid to encourage buying
 
-        # Place the market-making orders based on the computed bid/ask prices.
-        buy_order_volume, sell_order_volume = self.market_make(orders, bid, ask, position, buy_order_volume, sell_order_volume)
+        # Size orders based on position and scaling factor
+        buy_qty = min(remaining_buy_capacity, max(1, int(self.limit * 0.25 * scaling_factor)))
+        if buy_qty > 0 and bid < ask:  # Ensure no crossing
+            orders.append(Order(self.symbol, round(bid), buy_qty))
+            buy_order_volume += buy_qty
+        
+        sell_qty = min(remaining_sell_capacity, max(1, int(self.limit * 0.25 * scaling_factor)))
+        if sell_qty > 0 and ask > bid:  # Ensure no crossing
+            orders.append(Order(self.symbol, round(ask), -sell_qty))
+            sell_order_volume += sell_qty
 
         return orders, buy_order_volume, sell_order_volume
-    
+
     def act(self, state: TradingState):
         position = state.position.get(self.symbol, 0)
-        take, buy_order_volume, sell_order_volume = self.take_orders(position, 0, 0)
+        buy_order_volume = 0
+        sell_order_volume = 0
+        
+        # Use all three order types: taking, clearing, and making
+        take, buy_order_volume, sell_order_volume = self.take_orders(position, buy_order_volume, sell_order_volume)
         clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
         make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
+    
+        # Combine all order types
         return take + clear + make
-
+        
 # Continuing the strategies from Round 1
 class ResinStrategy(MarketMakeStrategy):
 
@@ -454,13 +482,14 @@ class SquidInkStrategy(MarketMakeStrategy):
         clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
         make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
         return orders + clear + make
-
+    
 
 class PicnicBasketStrategy(MarketMakeStrategy):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
         # components = ["CROISSANTS", "JAMS", "DJEMBES"]
         # quantities = [6, 3, 1]
         super().__init__(symbol, limit, order_depth, trader_data)
+
         # Parameters optimized for component-based mean reversion
         self.take_width = 1
         self.clear_width = 0
@@ -754,7 +783,42 @@ class PicnicBasket1Strategy(PicnicBasketStrategy):
         self.components = ["CROISSANTS", "JAMS", "DJEMBES"]
         self.quantities = [6, 3, 1]
         super().__init__(symbol, limit, order_depth, trader_data)
+
+        # if f"{self.symbol}_price_history" not in self.trader_data:
+        #     # Preload with reasonable historical values
+        #     # Historical average price and typical deviations from backtesting
+        #     self.trader_data[f"{self.symbol}_price_history"] = deque([58690, 58695, 58700, 58685, 58680], maxlen=100)
+            
+        #     # Preload deviation history with typical values
+        #     self.trader_data[f"{self.symbol}_pct_deviation_history"] = deque(
+        #         [0.002, -0.001, 0.0015, -0.0005, 0.001, 0.002, -0.0015, 0.0005, -0.001, 0.0025], 
+        #         maxlen=50
+        #     )
+            
+        #     # Initialize other statistical values
+        #     self.trader_data[f"{self.symbol}_components_value"] = 58687
+        #     self.trader_data[f"{self.symbol}_market_value"] = 58690
+        #     self.trader_data[f"{self.symbol}_z_score"] = 0.1
+        #     self.trader_data[f"{self.symbol}_deviation"] = 0.005
+
         # Parameters optimized for component-based mean reversion
+        self.take_width = 1
+        self.clear_width = 0
+        self.disregard_edge = 1
+        self.join_edge = 1
+        self.default_edge = 2
+        self.arb_threshold = 1  # Tighter threshold for more aggressive mean reversion
+        self.component_reversion_strength = 0.  # How strongly to revert to component value
+        self.prevent_adverse = True
+        self.adverse_volume = 15  # Avoid thin liquidity
+        self.soft_position_limit = int(self.limit * 6)
+
+class PicnicBasket2Strategy(PicnicBasketStrategy):
+    components = []
+    def __init__(self, symbol, limit, order_depth, trader_data):
+        self.components = ["CROISSANTS", "JAMS"]
+        self.quantities = [4, 2]
+        super().__init__(symbol, limit, order_depth, trader_data)
         self.take_width = 1
         self.clear_width = 0
         self.disregard_edge = 1
@@ -765,13 +829,6 @@ class PicnicBasket1Strategy(PicnicBasketStrategy):
         self.prevent_adverse = True
         self.adverse_volume = 15  # Avoid thin liquidity
         self.soft_position_limit = int(self.limit * 0.85)
-
-class PicnicBasket2Strategy(PicnicBasketStrategy):
-    components = []
-    def __init__(self, symbol, limit, order_depth, trader_data):
-        self.components = ["CROISSANTS", "JAMS"]
-        self.quantities = [4, 2]
-        super().__init__(symbol, limit, order_depth, trader_data)
         
 class Trader:
 
@@ -793,7 +850,8 @@ class Trader:
             trader_data = jsonpickle.decode(state.traderData)
         strategies = {symbol: constructor(symbol, self.limits[symbol], state.order_depths[symbol], trader_data) for symbol, constructor in {
             "RAINFOREST_RESIN" : ResinStrategy, "KELP" : KelpStrategy, "SQUID_INK" : SquidInkStrategy,
-            "PICNIC_BASKET1": PicnicBasket1Strategy}.items()}
+            # "CROISSANTS" : CroissantsStrategy, "JAMS" : JamsStrategy, "DJEMBES" : DjembesStrategy,
+            "PICNIC_BASKET1": PicnicBasket1Strategy, "PICNIC_BASKET2": PicnicBasket2Strategy}.items()}
         conversions = 0
         orders = {}
         for symbol, strategy in strategies.items():
