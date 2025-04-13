@@ -335,7 +335,7 @@ class MarketMakeStrategy():
         make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
     
         # Combine all order types
-        return take + clear + make
+        return {self.symbol: take + clear + make}
         
 # Continuing the strategies from Round 1
 class ResinStrategy(MarketMakeStrategy):
@@ -481,7 +481,7 @@ class SquidInkStrategy(MarketMakeStrategy):
         
         clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
         make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
-        return orders + clear + make
+        return {self.symbol: orders + clear + make}
     
 
 class PicnicBasketStrategy(MarketMakeStrategy):
@@ -546,16 +546,10 @@ class PicnicBasketStrategy(MarketMakeStrategy):
                     self.trader_data[f"{self.symbol}_pct_deviation_history"] = deque(maxlen=50)
                 self.trader_data[f"{self.symbol}_pct_deviation_history"].append(pct_deviation)
                 
-                # Calculate custom statistics (mean and standard deviation)
                 deviation_history = list(self.trader_data[f"{self.symbol}_pct_deviation_history"])
                 if len(deviation_history) > 5:  # Need enough data for meaningful statistics
-                    # Custom mean calculation
-                    mean_deviation = sum(deviation_history) / len(deviation_history)
-                    
-                    # Custom standard deviation calculation
-                    squared_diffs = [(x - mean_deviation) ** 2 for x in deviation_history]
-                    variance = sum(squared_diffs) / len(squared_diffs)
-                    std_deviation = max(0.0001, variance ** 0.5)  # sqrt of variance, with minimum value
+                    mean_deviation = np.mean(deviation_history)
+                    std_deviation = np.std(deviation_history) 
                     
                     # Calculate z-score (how many standard deviations from mean)
                     z_score = (pct_deviation - mean_deviation) / std_deviation
@@ -632,7 +626,27 @@ class PicnicBasketStrategy(MarketMakeStrategy):
                 
             return fair
         return None
-        
+    
+    def hedge(self, state: TradingState, order: Order) -> dict[str: Order]:
+        quantity = order.quantity
+        orders = {'CROISSANTS': None, 'JAMS': None, 'DJEMBES': None}
+        for i, component in enumerate(self.components):
+            if component in state.order_depths:
+                component_order_depth = state.order_depths[component]
+                if quantity > 0:
+                    best_ask = min(component_order_depth.sell_orders.keys())
+                    hedge_quantity = min(quantity * self.quantities[i], 
+                                     component_order_depth.sell_orders[best_ask])
+                    if hedge_quantity > 0:
+                        orders[component] = Order(component, best_ask, hedge_quantity)
+                if quantity < 0:
+                    best_bid = max(component_order_depth.buy_orders.keys())
+                    hedge_quantity = min(-quantity * self.quantities[i], 
+                                     component_order_depth.buy_orders[best_bid])
+                    if hedge_quantity > 0:
+                        orders[component] = Order(component, best_bid, -hedge_quantity)
+        return orders
+                    
     def act(self, state: TradingState):
         self.fair_value = self.fair_price(state)
         if self.fair_value is None:
@@ -645,6 +659,7 @@ class PicnicBasketStrategy(MarketMakeStrategy):
             
         position = state.position.get(self.symbol, 0)
         orders = []
+        component_orders = {COMPONENT : [] for COMPONENT in self.components}
         buy_order_volume = 0
         sell_order_volume = 0
         
@@ -680,6 +695,10 @@ class PicnicBasketStrategy(MarketMakeStrategy):
                     
                     if quantity > 0:
                         orders.append(Order(self.symbol, best_bid, -quantity))
+                        hedge_orders = self.hedge(state, orders[-1])
+                        for i, component in enumerate(self.components):
+                            if (hedge_orders[component] != None): component_orders[component].append(hedge_orders[component])
+
                         sell_order_volume += quantity
                         
                         # Sweep additional levels with more intelligent logic
@@ -710,6 +729,9 @@ class PicnicBasketStrategy(MarketMakeStrategy):
                                     
                                     if sweep_quantity > 0:
                                         orders.append(Order(self.symbol, bid_price, -sweep_quantity))
+                                        hedge_orders = self.hedge(state, orders[-1])
+                                        for i, component in enumerate(self.components):
+                                            if (hedge_orders[component] != None): component_orders[component].append(hedge_orders[component])
                                         sell_order_volume += sweep_quantity
                                         remaining_capacity -= sweep_quantity
                                         levels_swept += 1
@@ -728,6 +750,9 @@ class PicnicBasketStrategy(MarketMakeStrategy):
                     
                     if quantity > 0:
                         orders.append(Order(self.symbol, best_ask, quantity))
+                        hedge_orders = self.hedge(state, orders[-1])
+                        for i, component in enumerate(self.components):
+                            if (hedge_orders[component] != None): component_orders[component].append(hedge_orders[component])
                         buy_order_volume += quantity
                         
                         # Sweep additional levels with more intelligent logic
@@ -758,6 +783,9 @@ class PicnicBasketStrategy(MarketMakeStrategy):
                                     
                                     if sweep_quantity > 0:
                                         orders.append(Order(self.symbol, ask_price, sweep_quantity))
+                                        hedge_orders = self.hedge(state, orders[-1])
+                                        for i, component in enumerate(self.components):
+                                            if (hedge_orders[component] != None): component_orders[component].append(hedge_orders[component])
                                         buy_order_volume += sweep_quantity
                                         remaining_capacity -= sweep_quantity
                                         levels_swept += 1
@@ -775,8 +803,8 @@ class PicnicBasketStrategy(MarketMakeStrategy):
         take, buy_order_volume, sell_order_volume = self.take_orders(position, buy_order_volume, sell_order_volume)
         clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
         make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
-        
-        return orders + take + clear + make
+        component_orders[self.symbol] = orders + take + clear + make
+        return component_orders
 
 class PicnicBasket1Strategy(PicnicBasketStrategy):
     def __init__(self, symbol, limit, order_depth, trader_data):
@@ -856,7 +884,9 @@ class Trader:
         orders = {}
         for symbol, strategy in strategies.items():
             if symbol in state.order_depths:
-                orders[symbol] = strategy.act(state)
+                orders_dict = strategy.act(state)
+                for symbol, order_list in orders_dict.items():
+                    orders[symbol] = order_list
         new_trader_data = jsonpickle.encode(trader_data)
 
         logger.flush(state, orders, conversions, new_trader_data)
