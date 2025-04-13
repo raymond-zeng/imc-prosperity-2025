@@ -801,9 +801,21 @@ class PicnicBasketStrategy(MarketMakeStrategy):
         
         # Standard market making layers with adaptive parameters
         take, buy_order_volume, sell_order_volume = self.take_orders(position, buy_order_volume, sell_order_volume)
+        for order in take:
+            hedge_orders = self.hedge(state, order)
+            for i, component in enumerate(self.components):
+                if (hedge_orders[component] != None): component_orders[component].append(hedge_orders[component])
         clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
+        for order in clear:
+            hedge_orders = self.hedge(state, order)
+            for i, component in enumerate(self.components):
+                if (hedge_orders[component] != None): component_orders[component].append(hedge_orders[component])
         make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
-        component_orders[self.symbol] = orders + take + clear + make
+        for order in make:
+            hedge_orders = self.hedge(state, order)
+            for i, component in enumerate(self.components):
+                if (hedge_orders[component] != None): component_orders[component].append(hedge_orders[component])
+        component_orders[self.symbol] = orders + clear + make
         return component_orders
 
 class PicnicBasket1Strategy(PicnicBasketStrategy):
