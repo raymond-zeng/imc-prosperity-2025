@@ -558,16 +558,16 @@ class PicnicBasketStrategy(MarketMakeStrategy):
                     # Use z-score for more consistent threshold adjustments
                     if abs(z_score) > 2.0:  # Very significant deviation (>2 standard deviations)
                         # For large statistical deviations, increase reversion strength
-                        self.component_reversion_strength = 0.5
+                        self.component_reversion_strength = 0.78
                         self.arb_threshold = 0.001  # Almost any deviation is worth trading
                         self.take_width = 0  # Extremely aggressive, take at fair value
                     elif abs(z_score) > 1.0:  # Moderate deviation (1-2 standard deviations)
-                        self.component_reversion_strength = 0.4
+                        self.component_reversion_strength = 0.75
                         self.arb_threshold = 0.002  # Small percentage threshold
                         self.take_width = 1
                     else:  # Small deviation (<1 standard deviation)
                         # For small deviations, normal settings
-                        self.component_reversion_strength = 0.3
+                        self.component_reversion_strength = 0.6
                         self.arb_threshold = 0.004  # Higher percentage threshold
                         self.take_width = 1
                         
