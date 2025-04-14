@@ -995,7 +995,7 @@ class BaseVolcanicRockVoucherStrategy(MarketMakeStrategy):
             adjusted_vol = historical_vol * self.volatility_adjustment
             
             # Smoothly adjust volatility estimate with exponential weighting
-            alpha = 0.6  # Weight for new observation
+            alpha = 0.7  # Weight for new observation
             self.volatility = alpha * adjusted_vol + (1 - alpha) * self.volatility
             
             # Ensure volatility is within reasonable bounds
@@ -1265,7 +1265,7 @@ class VolcanicRockStrategy(MarketMakeStrategy):
         self.soft_position_limit = int(limit * 0.7)
         
         # Option-awareness parameters
-        self.delta_hedge_weight = 0.8  # Weight for net delta
+        self.delta_hedge_weight = 0.9  # Weight for net delta
         
         # For tracking
         self.fair_value = 0
