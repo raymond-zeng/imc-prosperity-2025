@@ -1207,7 +1207,7 @@ class VolcanicRockVoucher9500Strategy(BaseVolcanicRockVoucherStrategy):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
         super().__init__(symbol, limit, order_depth, trader_data)
         # Deep ITM options - less volatility, more aggressive pricing
-        self.volatility_adjustment = 0.9
+        self.volatility_adjustment = 0.95
         self.pricing_thresholds = (0.97, 1.03)  # Tighter thresholds
         self.delta_hedge_factor = 0.95  # Slightly less hedging as delta is close to 1
         self.time_weight_1day = 0.15    # More intrinsic value weight (85/15)
@@ -1217,7 +1217,7 @@ class VolcanicRockVoucher9750Strategy(BaseVolcanicRockVoucherStrategy):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
         super().__init__(symbol, limit, order_depth, trader_data)
         # Moderately ITM options
-        self.volatility_adjustment = 0.95
+        self.volatility_adjustment = 1
         self.pricing_thresholds = (0.96, 1.04)
         self.delta_hedge_factor = 1.0
         self.mm_size_factor = 0.23
@@ -1265,7 +1265,7 @@ class VolcanicRockStrategy(MarketMakeStrategy):
         self.soft_position_limit = int(limit * 0.7)
         
         # Option-awareness parameters
-        self.delta_hedge_weight = 0.9  # Weight for net delta
+        self.delta_hedge_weight = 1.4 # Weight for net delta
         
         # For tracking
         self.fair_value = 0
