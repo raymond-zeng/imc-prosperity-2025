@@ -6,6 +6,8 @@ from scipy.stats import norm
 from scipy.optimize import curve_fit
 
 # Load the data
+df = pd.read_csv('round-3-island-data-bottle/prices_round_3_day_0.csv', sep=';')
+df = pd.read_csv('round-3-island-data-bottle/prices_round_3_day_1.csv', sep=';')
 df = pd.read_csv('round-3-island-data-bottle/prices_round_3_day_2.csv', sep=';')
 
 # Function to calculate Black-Scholes call option price
@@ -29,8 +31,8 @@ def parabola(x, a, b, c):
     return a * x**2 + b * x + c
 
 # Define parameters
-TTE = 6 / 365  # 6 days remaining
-r = 0.01  # risk-free rate
+TTE = 8 / 365  
+r = 0.00  # risk-free rate
 
 # List of strike prices for volcanic rock vouchers
 strikes = [9500, 9750, 10000, 10250, 10500]
@@ -40,17 +42,19 @@ moneyness = []
 implied_vols = []
 timestamps = []
 underlying_prices = []
+strike_prices = []  # Add this to track which strike each point belongs to
 
+print("Processing data for day 0...")
 # Process data for each timestamp
 for timestamp in df['timestamp'].unique():
-    print(timestamp)
     # Get volcanic rock price
+    print(f"Processing timestamp: {timestamp}, day 0")
+    TTE = 8/365 - (timestamp / 1000000) / 365
+    # print(f"TTE: {TTE}")
     rock_data = df[(df['timestamp'] == timestamp) & (df['product'] == 'VOLCANIC_ROCK')]
     if not rock_data.empty:
         # Calculate mid price
-        bid_price = rock_data['bid_price_1'].iloc[0]
-        ask_price = rock_data['ask_price_1'].iloc[0]
-        S = (bid_price + ask_price) / 2
+        S = rock_data['mid_price'].iloc[0]  # Use mid price directly
         
         # Process each voucher strike
         for K in strikes:
@@ -59,9 +63,7 @@ for timestamp in df['timestamp'].unique():
             
             if not voucher_data.empty:
                 # Calculate mid price of voucher
-                voucher_bid = voucher_data['bid_price_1'].iloc[0]
-                voucher_ask = voucher_data['ask_price_1'].iloc[0]
-                V = (voucher_bid + voucher_ask) / 2
+                V = voucher_data['mid_price'].iloc[0]  # Use mid price directly
                 
                 # Calculate moneyness
                 m = np.log(K/S) / np.sqrt(TTE)
@@ -74,13 +76,83 @@ for timestamp in df['timestamp'].unique():
                 implied_vols.append(iv)
                 timestamps.append(timestamp)
                 underlying_prices.append(S)
+                strike_prices.append(K)  # Store the strike price
+
+print("Processing data for day 1...")
+df = pd.read_csv('round-3-island-data-bottle/prices_round_3_day_1.csv', sep=';')
+TTE = 7 / 365  # 5 days remaining
+for timestamp in df['timestamp'].unique():
+    # Get volcanic rock price
+    print(f"Processing timestamp: {timestamp}, day 1")
+    TTE = 7/365 - (timestamp / 1000000) / 365
+    rock_data = df[(df['timestamp'] == timestamp) & (df['product'] == 'VOLCANIC_ROCK')]
+    if not rock_data.empty:
+        # Calculate mid price
+        S = rock_data['mid_price'].iloc[0]  # Use mid price directly
+        
+        # Process each voucher strike
+        for K in strikes:
+            voucher_symbol = f'VOLCANIC_ROCK_VOUCHER_{K}'
+            voucher_data = df[(df['timestamp'] == timestamp) & (df['product'] == voucher_symbol)]
+            
+            if not voucher_data.empty:
+                # Calculate mid price of voucher
+                V = voucher_data['mid_price'].iloc[0]  # Use mid price directly
+                
+                # Calculate moneyness
+                m = np.log(K/S) / np.sqrt(TTE)
+                
+                # Calculate implied volatility
+                iv = implied_volatility(V, S, K, TTE, r)
+                
+                # Store results
+                moneyness.append(m)
+                implied_vols.append(iv)
+                timestamps.append(timestamp)
+                underlying_prices.append(S)
+                strike_prices.append(K)  # Store the strike price
+
+print("Processing data for day 2...")
+df = pd.read_csv('round-3-island-data-bottle/prices_round_3_day_2.csv', sep=';')
+TTE = 6 / 365  # 5 days remaining
+for timestamp in df['timestamp'].unique():
+    # Get volcanic rock price
+    print(f"Processing timestamp: {timestamp}, day 2")
+    TTE = 6/365 - (timestamp / 1000000) / 365
+    rock_data = df[(df['timestamp'] == timestamp) & (df['product'] == 'VOLCANIC_ROCK')]
+    if not rock_data.empty:
+        # Calculate mid price
+        S = rock_data['mid_price'].iloc[0]  # Use mid price directly
+        
+        # Process each voucher strike
+        for K in strikes:
+            voucher_symbol = f'VOLCANIC_ROCK_VOUCHER_{K}'
+            voucher_data = df[(df['timestamp'] == timestamp) & (df['product'] == voucher_symbol)]
+            
+            if not voucher_data.empty:
+                # Calculate mid price of voucher
+                V = voucher_data['mid_price'].iloc[0]  # Use mid price directly
+                
+                # Calculate moneyness
+                m = np.log(K/S) / np.sqrt(TTE)
+                
+                # Calculate implied volatility
+                iv = implied_volatility(V, S, K, TTE, r)
+                
+                # Store results
+                moneyness.append(m)
+                implied_vols.append(iv)
+                timestamps.append(timestamp)
+                underlying_prices.append(S)
+                strike_prices.append(K)  # Store the strike price
 
 # Create DataFrame with results
 results = pd.DataFrame({
     'Timestamp': timestamps,
     'Moneyness': moneyness,
     'ImpliedVol': implied_vols,
-    'UnderlyingPrice': underlying_prices
+    'UnderlyingPrice': underlying_prices,
+    'Strike': strike_prices
 })
 
 # Filter out any invalid volatilities
@@ -96,12 +168,30 @@ y_fit = parabola(x_fit, *params)
 
 # Create the plot
 plt.figure(figsize=(12, 8))
-plt.scatter(results['Moneyness'], results['ImpliedVol'], alpha=0.5, label='Implied Volatilities')
-plt.plot(x_fit, y_fit, 'r-', label=f'Fitted Curve: {params[0]:.4f}x² + {params[1]:.4f}x + {params[2]:.4f}')
+
+# Define colors for each strike
+colors = {
+    9500: 'blue',
+    9750: 'green',
+    10000: 'red',
+    10250: 'purple',
+    10500: 'orange'
+}
+
+# Plot each strike with its own color
+for strike in strikes:
+    strike_data = results[results['Strike'] == strike]
+    plt.scatter(strike_data['Moneyness'], strike_data['ImpliedVol'], 
+                color=colors[strike], alpha=0.6, label=f'Strike: {strike}')
+
+# Plot the fitted curve
+plt.plot(x_fit, y_fit, 'k-', linewidth=2, 
+         label=f'Fitted Curve: {params[0]:.4f}x² + {params[1]:.4f}x + {params[2]:.4f}')
 
 # Base IV (at-the-money)
 base_iv = parabola(0, *params)
-plt.axhline(y=base_iv, color='g', linestyle='--', label=f'Base IV (ATM): {base_iv:.4f}')
+plt.axhline(y=base_iv, color='k', linestyle='--', linewidth=1.5, 
+            label=f'Base IV (ATM): {base_iv:.4f}')
 plt.axvline(x=0, color='k', linestyle='--', alpha=0.3)
 
 plt.xlabel('Moneyness (m = log(K/S)/sqrt(T))')
@@ -110,7 +200,35 @@ plt.title('Volatility Smile for Volcanic Rock Vouchers')
 plt.legend()
 plt.grid(True, alpha=0.3)
 
+plt.tight_layout()
 plt.show()
 
-# Save the results to a CSV file
-results.to_csv('implied_volatility_results.csv', index=False)
+# Time series of base IV
+plt.figure(figsize=(12, 6))
+
+# Group by timestamp and fit a parabola for each timestamp
+timestamps = results['Timestamp'].unique()
+
+base_ivs = []
+time_points = []
+
+for timestamp in timestamps:
+    ts_data = results[results['Timestamp'] == timestamp]
+    if len(ts_data) >= 3:  # Need at least 3 points to fit a parabola
+        try:
+            params, _ = curve_fit(parabola, ts_data['Moneyness'], ts_data['ImpliedVol'])
+            base_iv = parabola(0, *params)
+            base_ivs.append(base_iv)
+            time_points.append(timestamp)
+        except:
+            continue
+
+# Plot the time series of base IV
+plt.plot(time_points, base_ivs, 'b-', label='Base IV (ATM)')
+plt.xlabel('Timestamp')
+plt.ylabel('Base Implied Volatility')
+plt.title('Time Series of Base Implied Volatility')
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.tight_layout()
+plt.show()
