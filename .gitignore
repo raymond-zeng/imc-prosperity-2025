@@ -178,3 +178,7 @@ cython_debug/
 
 # data directory
 data/
+
+
+# Wolfram
+WolframClientForPython/
