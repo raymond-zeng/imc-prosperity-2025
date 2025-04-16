@@ -1351,7 +1351,7 @@ class BaseVolcanicRockVoucherStrategy(MarketMakeStrategy):
         position_int = state.position.get(self.symbol, 0)
         
         # Get volcanic rock price
-        spot_price = self.trader_data.get("VOLCANIC_ROCK_last_price", 10000)
+        spot_price = self.trader_data.get("VOLCANIC_ROCK_last_price", 10200)
         
         # Adjust parameters based on strike price
         self.adjust_parameters_for_strike()
@@ -1525,6 +1525,213 @@ class Voucher10500Strategy(BaseVolcanicRockVoucherStrategy):
             self.soft_position_limit = int(self.limit * 0.85)
             self.take_width = 2
             self.clear_width = 1
+
+class VolcanicRockStrategy(MarketMakeStrategy):
+    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
+        super().__init__(symbol, limit, order_depth, trader_data)
+        # Parameters for market making
+        self.take_width = 2
+        self.clear_width = 1
+        self.disregard_edge = 2
+        self.join_edge = 1
+        self.default_edge = 3
+        self.prevent_adverse = True
+        self.adverse_volume = 30  # Higher volume threshold for more liquid asset
+        self.soft_position_limit = int(limit * 0.8)
+        
+        # Bollinger Bands parameters
+        self.bollinger_window = 30  # Longer window for more stable bands
+        self.bollinger_std = 1.8    # Slightly tighter for more signals
+        self.band_trade_threshold = 0.7
+        self.mean_reversion_strength = 0.3  # How strongly to revert to mean
+        
+        # Volatility tracking
+        self.vol_window = 20
+        self.vol_threshold_high = 0.3  # Threshold to identify high vol regimes
+        self.vol_threshold_low = 0.1   # Threshold to identify low vol regimes
+        
+        # Initialize price history
+        if f"{self.symbol}_price_history" not in self.trader_data:
+            self.trader_data[f"{self.symbol}_price_history"] = deque(maxlen=100)
+            
+        # Track position cost basis
+        if f"{self.symbol}_trades" not in self.trader_data:
+            self.trader_data[f"{self.symbol}_trades"] = []  # Store (price, quantity, timestamp)
+            
+        # Initialize volatility history
+        if f"{self.symbol}_volatility_history" not in self.trader_data:
+            self.trader_data[f"{self.symbol}_volatility_history"] = deque(maxlen=50)
+    
+    def fair_price(self, state: TradingState) -> float:
+        """Calculate fair price based on market data and Bollinger Bands"""
+        if len(self.order_depth.sell_orders) == 0 or len(self.order_depth.buy_orders) == 0:
+            # Use last known fair value if market is one-sided
+            return self.trader_data.get(f"{self.symbol}_last_fair", 10200)
+            
+        # Calculate mid price
+        best_bid = max(self.order_depth.buy_orders.keys())
+        best_ask = min(self.order_depth.sell_orders.keys())
+        mid_price = (best_bid + best_ask) / 2
+        
+        # Store price in history
+        self.trader_data[f"{self.symbol}_price_history"].append(mid_price)
+        price_history = list(self.trader_data[f"{self.symbol}_price_history"])
+        
+        # Calculate fair price using Bollinger Bands
+        if len(price_history) >= self.bollinger_window:
+            # Calculate Bollinger Bands
+            prices_array = np.array(price_history[-self.bollinger_window:])
+            sma = np.mean(prices_array)
+            std_dev = np.std(prices_array)
+            
+            upper_band = sma + self.bollinger_std * std_dev
+            lower_band = sma - self.bollinger_std * std_dev
+            
+            # Store bands for reference
+            self.trader_data[f"{self.symbol}_bb_sma"] = sma
+            self.trader_data[f"{self.symbol}_bb_upper"] = upper_band
+            self.trader_data[f"{self.symbol}_bb_lower"] = lower_band
+            
+            # Apply mean reversion based on band position
+            fair_value = mid_price
+            
+            # If price is near upper band, expect downward reversion
+            if mid_price > sma + (upper_band - sma) * self.band_trade_threshold:
+                reversion = (mid_price - sma) * self.mean_reversion_strength
+                fair_value = mid_price - reversion
+                
+                # Adjust parameters for selling bias
+                self.take_width = 1  # More aggressive taking
+                self.default_edge = 2  # Tighter spread
+                
+            # If price is near lower band, expect upward reversion
+            elif mid_price < sma - (sma - lower_band) * self.band_trade_threshold:
+                reversion = (sma - mid_price) * self.mean_reversion_strength
+                fair_value = mid_price + reversion
+                
+                # Adjust parameters for buying bias
+                self.take_width = 1
+                self.default_edge = 2
+                
+            else:
+                # In the middle of bands - normal market making
+                self.take_width = 2
+                self.default_edge = 3
+                
+            # Calculate recent volatility (standard deviation of returns)
+            if len(price_history) >= 3:
+                returns = [(price_history[i]/price_history[i-1]) - 1 for i in range(1, len(price_history))]
+                recent_vol = np.std(returns[-min(len(returns), self.vol_window):]) * math.sqrt(252)  # Annualized
+                self.trader_data[f"{self.symbol}_volatility_history"].append(recent_vol)
+                self.trader_data[f"{self.symbol}_current_vol"] = recent_vol
+                
+                # Adjust parameters based on volatility regime
+                avg_vol = np.mean(list(self.trader_data[f"{self.symbol}_volatility_history"]))
+                
+                if recent_vol > self.vol_threshold_high or recent_vol > avg_vol * 1.5:
+                    # Higher volatility - wider spreads, more conservative
+                    self.default_edge = max(3, self.default_edge + 1)
+                    self.take_width = max(2, self.take_width + 1)
+                    self.mean_reversion_strength = 0.2  # Less mean reversion in high vol
+                    
+                elif recent_vol < self.vol_threshold_low or recent_vol < avg_vol * 0.7:
+                    # Lower volatility - tighter spreads, more aggressive
+                    self.default_edge = max(2, self.default_edge - 1)
+                    self.take_width = max(1, self.take_width - 1)
+                    self.mean_reversion_strength = 0.4  # More mean reversion in low vol
+            
+            # Remember the fair value
+            self.trader_data[f"{self.symbol}_last_fair"] = fair_value
+            return fair_value
+            
+        # Not enough data for Bollinger Bands
+        self.trader_data[f"{self.symbol}_last_fair"] = mid_price
+        return mid_price
+        
+    def update_cost_basis(self, state: TradingState):
+        """Track cost basis of current position"""
+        symbol_trades = self.trader_data.get(f"{self.symbol}_trades", [])
+        
+        # Add new trades from this round
+        if self.symbol in state.own_trades:
+            new_trades = state.own_trades[self.symbol]
+            for trade in new_trades:
+                # Add (price, quantity, timestamp)
+                symbol_trades.append((trade.price, trade.quantity, trade.timestamp))
+        
+        # Limit history size
+        if len(symbol_trades) > 500:
+            symbol_trades = symbol_trades[-500:]
+            
+        self.trader_data[f"{self.symbol}_trades"] = symbol_trades
+        
+        # Calculate average position cost
+        position = state.position.get(self.symbol, 0)
+        if position != 0:
+            total_cost = 0
+            total_quantity = 0
+            
+            # Simple calculation for demonstration
+            for price, qty, _ in symbol_trades:
+                total_cost += price * qty
+                total_quantity += qty
+                
+            avg_price = total_cost / total_quantity if total_quantity != 0 else 0
+            self.trader_data[f"{self.symbol}_avg_price"] = avg_price
+    
+    def act(self, state: TradingState):
+        # Update position cost basis
+        self.update_cost_basis(state)
+        
+        # Calculate fair value
+        self.fair_value = self.fair_price(state)
+        position = state.position.get(self.symbol, 0)
+        
+        # Check if we need to adjust position limits based on voucher positions
+        voucher_delta_exposure = 0
+        voucher_symbols = [
+            "VOLCANIC_ROCK_VOUCHER_9500",
+            "VOLCANIC_ROCK_VOUCHER_9750",
+            "VOLCANIC_ROCK_VOUCHER_10000",
+            "VOLCANIC_ROCK_VOUCHER_10250",
+            "VOLCANIC_ROCK_VOUCHER_10500"
+        ]
+        
+        # Calculate delta exposure from voucher positions
+        for voucher in voucher_symbols:
+            voucher_pos = state.position.get(voucher, 0)
+            if voucher_pos != 0:
+                # Extract delta for this voucher
+                delta = self.trader_data.get(f"{voucher}_delta", 0.5)  # Default to 0.5 if unknown
+                # Add delta-weighted position
+                voucher_delta_exposure += voucher_pos * delta
+        
+        # Offset limit by voucher exposure to maintain overall risk limits
+        adjusted_limit = max(50, self.limit - abs(voucher_delta_exposure))
+        self.soft_position_limit = int(adjusted_limit * 0.8)
+        
+        # Handle position management
+        avg_price = self.trader_data.get(f"{self.symbol}_avg_price", self.fair_value)
+        
+        # If we have significant position that's profitable to exit
+        if position > self.soft_position_limit * 0.7 and self.fair_value > avg_price * 1.01:
+            # More aggressive selling to reduce position
+            self.take_width = 0
+            self.default_edge = 1
+        elif position < -self.soft_position_limit * 0.7 and self.fair_value < avg_price * 0.99:
+            # More aggressive buying to reduce short position
+            self.take_width = 0
+            self.default_edge = 1
+            
+        # Standard market making with our parameters
+        buy_order_volume = 0
+        sell_order_volume = 0
+        
+        take, buy_order_volume, sell_order_volume = self.take_orders(position, buy_order_volume, sell_order_volume)
+        clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
+        make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
+        
+        return {self.symbol: take + clear + make}
     
 class Trader:
     def __init__(self):
@@ -1559,7 +1766,7 @@ class Trader:
                 # "SQUID_INK": SquidInkStrategy,
                 # "PICNIC_BASKET1": PicnicBasket1Strategy, 
                 # "PICNIC_BASKET2": PicnicBasket2Strategy,
-                # "VOLCANIC_ROCK": ResinStrategy,  # Using ResinStrategy as base for volcanic rock
+                # "VOLCANIC_ROCK": VolcanicRockStrategy,  # Using ResinStrategy as base for volcanic rock
                 "VOLCANIC_ROCK_VOUCHER_9500": Voucher9500Strategy,
                 "VOLCANIC_ROCK_VOUCHER_9750": Voucher9750Strategy,
                 "VOLCANIC_ROCK_VOUCHER_10000": Voucher10000Strategy,
