@@ -991,8 +991,16 @@ class BaseVolcanicRockVoucherStrategy(MarketMakeStrategy):
             returns = np.diff(np.log(prices))
             historical_vol = np.std(returns) * np.sqrt(252)  # Annualized volatility
             
-            # Apply strike-specific volatility adjustment
-            adjusted_vol = historical_vol * self.volatility_adjustment
+            # Compute moneyness-based implied volatility from smile curve
+            T = self.remaining_days / 365
+            if T > 0:
+                m_t = np.log(self.strike / self.underlying_price) / np.sqrt(T)
+                smile_iv = 0.1350 * m_t**2 - 0.0050 * m_t + 0.1449
+                
+                # Blend historical and smile-based IVs for smoothness
+                adjusted_vol = 0.5 * historical_vol + 0.5 * smile_iv
+            else:
+                adjusted_vol = historical_vol  # fallback if expired
             
             # Smoothly adjust volatility estimate with exponential weighting
             alpha = 0.7  # Weight for new observation
