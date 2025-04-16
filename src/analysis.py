@@ -49,7 +49,7 @@ print("Processing data for day 0...")
 for timestamp in df['timestamp'].unique():
     # Get volcanic rock price
     print(f"Processing timestamp: {timestamp}, day 0")
-    TTE = 8/365 - (timestamp / 1000000) / 365
+    # TTE = 8/365 - (timestamp / 1000000) / 365
     # print(f"TTE: {TTE}")
     rock_data = df[(df['timestamp'] == timestamp) & (df['product'] == 'VOLCANIC_ROCK')]
     if not rock_data.empty:
@@ -72,11 +72,12 @@ for timestamp in df['timestamp'].unique():
                 iv = implied_volatility(V, S, K, TTE, r)
                 
                 # Store results
-                moneyness.append(m)
-                implied_vols.append(iv)
-                timestamps.append(timestamp)
-                underlying_prices.append(S)
-                strike_prices.append(K)  # Store the strike price
+                if iv > 0.11:
+                    moneyness.append(m)
+                    implied_vols.append(iv)
+                    timestamps.append(timestamp)
+                    underlying_prices.append(S)
+                    strike_prices.append(K)  # Store the strike price
 
 print("Processing data for day 1...")
 df = pd.read_csv('round-3-island-data-bottle/prices_round_3_day_1.csv', sep=';')
@@ -84,7 +85,7 @@ TTE = 7 / 365  # 5 days remaining
 for timestamp in df['timestamp'].unique():
     # Get volcanic rock price
     print(f"Processing timestamp: {timestamp}, day 1")
-    TTE = 7/365 - (timestamp / 1000000) / 365
+    # TTE = 7/365 - (timestamp / 1000000) / 365
     rock_data = df[(df['timestamp'] == timestamp) & (df['product'] == 'VOLCANIC_ROCK')]
     if not rock_data.empty:
         # Calculate mid price
@@ -106,11 +107,12 @@ for timestamp in df['timestamp'].unique():
                 iv = implied_volatility(V, S, K, TTE, r)
                 
                 # Store results
-                moneyness.append(m)
-                implied_vols.append(iv)
-                timestamps.append(timestamp)
-                underlying_prices.append(S)
-                strike_prices.append(K)  # Store the strike price
+                if iv > 0.11:
+                    moneyness.append(m)
+                    implied_vols.append(iv)
+                    timestamps.append(timestamp)
+                    underlying_prices.append(S)
+                    strike_prices.append(K)  # Store the strike price
 
 print("Processing data for day 2...")
 df = pd.read_csv('round-3-island-data-bottle/prices_round_3_day_2.csv', sep=';')
@@ -118,7 +120,7 @@ TTE = 6 / 365  # 5 days remaining
 for timestamp in df['timestamp'].unique():
     # Get volcanic rock price
     print(f"Processing timestamp: {timestamp}, day 2")
-    TTE = 6/365 - (timestamp / 1000000) / 365
+    # TTE = 6/365 - (timestamp / 1000000) / 365
     rock_data = df[(df['timestamp'] == timestamp) & (df['product'] == 'VOLCANIC_ROCK')]
     if not rock_data.empty:
         # Calculate mid price
@@ -140,11 +142,12 @@ for timestamp in df['timestamp'].unique():
                 iv = implied_volatility(V, S, K, TTE, r)
                 
                 # Store results
-                moneyness.append(m)
-                implied_vols.append(iv)
-                timestamps.append(timestamp)
-                underlying_prices.append(S)
-                strike_prices.append(K)  # Store the strike price
+                if iv > 0.11:
+                    moneyness.append(m)
+                    implied_vols.append(iv)
+                    timestamps.append(timestamp)
+                    underlying_prices.append(S)
+                    strike_prices.append(K)  # Store the strike price
 
 # Create DataFrame with results
 results = pd.DataFrame({
