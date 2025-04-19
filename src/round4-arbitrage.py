@@ -862,9 +862,9 @@ class BaseVolcanicRockVoucherStrategy(MarketMakeStrategy):
         self.strike_price = int(symbol.split("_")[-1])
         
         # Option parameters
-        self.days_to_expiry = 5  # Round 3 means 5 days left (7-3+1)
+        self.days_to_expiry = 4  # Round 3 means 5 days left (7-3+1)
 
-        self.risk_free_rate = 0.00  # Assumed 1% risk-free rate
+        self.risk_free_rate = 0.00  
         self.take_width = 2
         self.clear_width = 1
         self.disregard_edge = 1
@@ -1630,6 +1630,25 @@ class MagnificentMacaronsStrategy(MarketMakeStrategy):
         self.clear_width = 1
         self.join_edge = 1
         self.default_edge = 2
+        
+        # CSI threshold based on data analysis
+        self.critical_sunlight_index = 65.5
+        
+        # Track sunlight data
+        if "sunlight_history" not in trader_data:
+            trader_data["sunlight_history"] = []
+            
+        # Track sugar price data
+        if "sugar_price_history" not in trader_data:
+            trader_data["sugar_price_history"] = []
+            
+        # Track whether we're in a critical sunlight period
+        if "below_csi_period" not in trader_data:
+            trader_data["below_csi_period"] = False
+            
+        # Track periods below CSI
+        if "consecutive_below_csi" not in trader_data:
+            trader_data["consecutive_below_csi"] = 0
 
     def get_conversion_obs(self, state: TradingState):
         # Get the ConversionObservation for MAGNIFICENT_MACARONS
@@ -1645,20 +1664,145 @@ class MagnificentMacaronsStrategy(MarketMakeStrategy):
         # Storage cost: 0.1 per unit per timestamp for net long
         storage_cost = self.storage_cost_rate * holding_period
         return (sell - buy - storage_cost) > 0
+    
+    def adjust_strategy_for_sunlight(self, state, trader_data):
+        """Adjust strategy parameters based on current sunlight conditions using sliding window"""
+        # Get current sunlight index and sugar price
+        obs = self.get_conversion_obs(state)
+        if obs is None:
+            return 0.5  # Default minimum profit
+        
+        current_sunlight = obs.sunlightIndex
+        current_sugar_price = obs.sugarPrice
+        
+        # Update history
+        trader_data["sunlight_history"].append(current_sunlight)
+        trader_data["sugar_price_history"].append(current_sugar_price)
+        
+        # Keep only recent history (last 50 periods)
+        if len(trader_data["sunlight_history"]) > 50:
+            trader_data["sunlight_history"] = trader_data["sunlight_history"][-50:]
+        if len(trader_data["sugar_price_history"]) > 50:
+            trader_data["sugar_price_history"] = trader_data["sugar_price_history"][-50:]
+        
+        # Calculate average sunlight from sliding window if we have enough data
+        if len(trader_data["sunlight_history"]) >= 10:  # Need at least 10 data points
+            avg_sunlight = sum(trader_data["sunlight_history"][-50:]) / len(trader_data["sunlight_history"][-50:])
+            # Dynamically adjust CSI based on recent average
+            dynamic_csi = min(self.critical_sunlight_index, avg_sunlight * 0.99)  # 99% of average
+        else:
+            # Use static threshold if not enough history
+            dynamic_csi = self.critical_sunlight_index
+        
+        # Check if we're below dynamic CSI
+        is_below_csi = current_sunlight < dynamic_csi
+        
+        # Track consecutive periods below CSI
+        if is_below_csi:
+            trader_data["consecutive_below_csi"] += 1
+        else:
+            trader_data["consecutive_below_csi"] = 0
+        
+        # Determine if we're in a critical period (below CSI for multiple periods)
+        in_critical_period = trader_data["consecutive_below_csi"] >= 3
+        trader_data["below_csi_period"] = in_critical_period
+        
+        # Store the dynamic CSI value for reference
+        trader_data["dynamic_csi"] = dynamic_csi
+        
+        # Adjust minimum profit based on conditions
+        if in_critical_period:
+            # If we're below CSI for multiple periods, expect price increases
+            # Increase required profit for selling (to avoid selling too cheap)
+            # Decrease required profit for buying (to accumulate when prices will rise)
+            if current_sugar_price > 209:  # High sugar price
+                return 1.5  # Higher min profit to sell
+            else:
+                return 0.1  # Very low min profit to buy - more aggressive accumulation
+        elif is_below_csi:
+            # Just started going below CSI, be more aggressive with buying
+            return 0.3  # Lower profit threshold to buy more
+        else:
+            # Normal conditions
+            return 0.5
+    
+    def forecast_price_movement(self, trader_data, current_sugar_price):
+        """Forecast price movement based on sunlight and sugar price history"""
+        # Default to neutral
+        forecast = 0  # -1 for down, 0 for neutral, 1 for up
+        
+        # Only forecast if we have enough history
+        if len(trader_data["sunlight_history"]) < 5:
+            return forecast
+        
+        # Check if sunlight is dropping consistently
+        recent_sunlight = trader_data["sunlight_history"][-5:]
+        sunlight_dropping = all(recent_sunlight[i] > recent_sunlight[i+1] for i in range(len(recent_sunlight)-1))
+        
+        # Check if we're in a critical period
+        in_critical_period = trader_data["below_csi_period"]
+        
+        # Sugar price momentum
+        if len(trader_data["sugar_price_history"]) >= 5:
+            recent_sugar = trader_data["sugar_price_history"][-5:]
+            sugar_rising = all(recent_sugar[i] < recent_sugar[i+1] for i in range(len(recent_sugar)-1))
+            
+            # Strong signal: Below CSI, sunlight dropping, and sugar already rising
+            if in_critical_period and sunlight_dropping and sugar_rising:
+                forecast = 1  # Strong bullish
+            # Below CSI and sunlight dropping, but sugar not rising yet
+            elif in_critical_period and sunlight_dropping:
+                forecast = 0.5  # Moderately bullish
+            # Below CSI but stabilizing
+            elif in_critical_period:
+                forecast = 0.25  # Slightly bullish
+            # Above CSI but sugar rising
+            elif sugar_rising:
+                forecast = 0  # Neutral
+            # Above CSI and sugar dropping
+            else:
+                forecast = -0.25  # Slightly bearish
+        
+        return forecast
 
     def act(self, state: TradingState):
         obs = self.get_conversion_obs(state)
         position = state.position.get(self.symbol, 0)
         conversion_qty = 0
         orders = []
-        min_profit = 0.5  
+        
+        # Adjust strategy based on sunlight conditions
+        min_profit = self.adjust_strategy_for_sunlight(state, self.trader_data)
+        price_forecast = self.forecast_price_movement(self.trader_data, 
+                                                    obs.sugarPrice if obs else None)
 
         if obs is not None:
             buy_price, sell_price = self.calc_effective_prices(obs)
-            # f.write(f"Buy Price: {buy_price}, Sell Price: {sell_price}\n")
             order_depth = self.order_depth
             best_market_bid = max(order_depth.buy_orders.keys()) if order_depth.buy_orders else None
             best_market_ask = min(order_depth.sell_orders.keys()) if order_depth.sell_orders else None
+
+            # Record sunlight and price info
+            self.trader_data["last_sunlight"] = obs.sunlightIndex
+            self.trader_data["last_sugar_price"] = obs.sugarPrice
+            
+            # Adjust position sizing based on forecast
+            buy_size_multiplier = 1.0
+            sell_size_multiplier = 1.0
+            
+            # Increase buying when forecast is bullish, increase selling when bearish
+            if price_forecast > 0.5:  # Strong bullish
+                buy_size_multiplier = 1.0
+                sell_size_multiplier = 0.5  # Reduce selling
+            elif price_forecast > 0:  # Mild bullish
+                buy_size_multiplier = 0.9
+                sell_size_multiplier = 0.7
+            elif price_forecast < -0.5:  # Strong bearish
+                buy_size_multiplier = 0.5  # Reduce buying
+                sell_size_multiplier = 1.0
+            elif price_forecast < 0:  # Mild bearish
+                buy_size_multiplier = 0.7
+                sell_size_multiplier = 0.9
 
             # Only trade if both conversion and market legs are available
             # 1. Buy from Pristine Cuisine (conversion), sell on market
@@ -1668,8 +1812,16 @@ class MagnificentMacaronsStrategy(MarketMakeStrategy):
                 and order_depth.buy_orders[best_market_bid] > 0
             ):
                 profit = best_market_bid - buy_price - self.storage_cost_rate
-                if profit > min_profit:
-                    max_qty = min(self.conversion_limit, self.limit - position, order_depth.buy_orders[best_market_bid])
+                
+                # Adjust min_profit based on forecast - higher threshold to sell if bullish
+                adjusted_min_profit = min_profit * (1.0 + price_forecast)
+                
+                if profit > adjusted_min_profit:
+                    max_qty = min(
+                        int(self.conversion_limit * sell_size_multiplier), 
+                        self.limit - position, 
+                        order_depth.buy_orders[best_market_bid]
+                    )
                     if max_qty > 0:
                         conversion_qty = max_qty
                         orders.append(Order(self.symbol, best_market_bid, -max_qty))
@@ -1681,17 +1833,54 @@ class MagnificentMacaronsStrategy(MarketMakeStrategy):
                 and -order_depth.sell_orders[best_market_ask] > 0
             ):
                 profit = sell_price - best_market_ask
-                if profit > min_profit:
-                    max_qty = min(self.conversion_limit, position + self.limit, -order_depth.sell_orders[best_market_ask])
+                
+                # Adjust min_profit based on forecast - lower threshold to buy if bullish
+                adjusted_min_profit = min_profit * (1.0 - price_forecast)
+                
+                if profit > adjusted_min_profit:
+                    max_qty = min(
+                        int(self.conversion_limit * buy_size_multiplier), 
+                        position + self.limit, 
+                        -order_depth.sell_orders[best_market_ask]
+                    )
                     if max_qty > 0:
                         conversion_qty = -max_qty
                         orders.append(Order(self.symbol, best_market_ask, max_qty))
+
+            # Additional strategy: if we forecast prices will rise significantly,
+            # consider accumulating even with minimal profit
+            if (
+                self.trader_data.get("below_csi_period", False) 
+                and obs.sunlightIndex < self.critical_sunlight_index - 0.5
+                and position < self.limit * 0.5  # Only if we have capacity
+                and best_market_ask is not None
+            ):
+                # Accept very low profit or even small loss to accumulate when we expect price rise
+                min_acceptable_profit = -0.2  # Accept small loss
+                profit = sell_price - best_market_ask
+                
+                if profit > min_acceptable_profit:
+                    # Buy more aggressively but with smaller size
+                    accumulation_qty = min(
+                        int(self.conversion_limit * 0.5),  # Half size for speculative trades
+                        position + self.limit,
+                        -order_depth.sell_orders[best_market_ask]
+                    )
+                    if accumulation_qty > 0 and not orders:  # Only if we haven't placed orders yet
+                        conversion_qty = -accumulation_qty
+                        orders.append(Order(self.symbol, best_market_ask, accumulation_qty))
 
         # Optionally, fallback to market making if no conversion trade
         if not orders:
             return super().act(state), 0
 
-        # f.write(f"Conversion Orders: {conversion_qty}\n")
+        # if timestamp >= 98,000: set positions to 0
+        if state.timestamp >= 98000:
+            if position > 0:
+                orders.append(Order(self.symbol, best_market_bid, -position))
+            elif position < 0:
+                orders.append(Order(self.symbol, best_market_ask, -position))     
+                
         return {self.symbol: orders}, conversion_qty
     
 class Trader:

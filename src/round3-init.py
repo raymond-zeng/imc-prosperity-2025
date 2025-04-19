@@ -3,12 +3,63 @@ from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder
 import numpy as np
 import math
 from collections import deque
-from statistics import NormalDist
 
-f = open("test.txt", "w")
+# f = open("test.txt", "w")
 import json
 from typing import Any
 from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
+
+from statistics import NormalDist
+
+def black_scholes_call(S, K, T, r, sigma):
+    """
+    Calculate Black-Scholes price for a call option using Python's statistics module
+    
+    Parameters:
+    S: Current price of underlying asset (VOLCANIC_ROCK)
+    K: Strike price of the voucher
+    T: Time to expiration in years
+    r: Risk-free interest rate
+    sigma: Volatility of the underlying asset
+    
+    Returns:
+    Call option price
+    """
+    d1 = (np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    
+    # Use Python's built-in NormalDist for the cumulative distribution function
+    norm_cdf = NormalDist(mu=0, sigma=1).cdf
+    
+    call_price = S * norm_cdf(d1) - K * np.exp(-r * T) * norm_cdf(d2)
+    return call_price
+
+def calculate_option_greeks(S, K, T, r, sigma):
+    """Calculate option Greeks for risk management using Python's statistics module"""
+    d1 = (np.log(S/K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+    d2 = d1 - sigma * np.sqrt(T)
+    
+    # Get normal distribution functions
+    norm_cdf = NormalDist(mu=0, sigma=1).cdf
+    
+    # For PDF, we can use the standard normal PDF formula since it's not directly in statistics
+    def norm_pdf(x):
+        return (1.0 / np.sqrt(2 * np.pi)) * np.exp(-0.5 * x**2)
+    
+    # Delta - sensitivity to underlying price changes
+    delta = norm_cdf(d1)
+    
+    # Gamma - rate of change of delta
+    gamma = norm_pdf(d1) / (S * sigma * np.sqrt(T))
+    
+    # Theta - sensitivity to time decay (daily)
+    theta = -(S * sigma * norm_pdf(d1)) / (2 * np.sqrt(T)) - r * K * np.exp(-r * T) * norm_cdf(d2)
+    theta = theta / 365  # Convert to daily theta
+    
+    # Vega - sensitivity to volatility changes
+    vega = S * np.sqrt(T) * norm_pdf(d1) * 0.01  # For 1% change in volatility
+    
+    return {"delta": delta, "gamma": gamma, "theta": theta, "vega": vega}
 
 class Logger:
     def __init__(self) -> None:
@@ -853,931 +904,328 @@ class PicnicBasket2Strategy(PicnicBasketStrategy):
         self.prevent_adverse = True
         self.adverse_volume = 15  # Avoid thin liquidity
         self.soft_position_limit = int(self.limit * 0.85)
-        
-class BaseVolcanicRockVoucherStrategy(MarketMakeStrategy):
+
+class VolcanicRockVoucherStrategy(MarketMakeStrategy):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
         super().__init__(symbol, limit, order_depth, trader_data)
         
         # Extract strike price from symbol
-        self.strike_price = int(symbol.split("_")[-1])
+        self.strike = int(symbol.split('_')[-1])
         
-        # Option parameters
-        self.days_to_expiry = 5  # Round 3 means 5 days left (7-3+1)
-
-        self.risk_free_rate = 0.00  # Assumed 1% risk-free rate
+        # Black-Scholes parameters
+        self.volatility = trader_data.get(f"{symbol}_volatility", 0.3)  # Initial estimate
+        self.risk_free_rate = 0.01
+        
+        # Get current round from trader_data to track days until expiry
+        # self.current_round = trader_data.get("current_round", 1)
+        # self.remaining_days = 8 - self.current_round  # 7 days at round 1, decreases each round
+        self.remaining_days = 5
+        
+        # Parameters for market making
         self.take_width = 2
         self.clear_width = 1
         self.disregard_edge = 1
-        self.join_edge = 0
-        self.default_edge = 2
+        self.join_edge = 2
+        self.default_edge = 3
         self.prevent_adverse = True
-        # self.adverse_volume = 15
-        self.volatility_estimate = 0.25  # Initial estimate, will be adjusted
+        self.adverse_volume = 10
+        self.soft_position_limit = int(limit * 0.8)
         
-        # Iron condor parameters
-        self.width = 200  # Wing width
-        self.narrow_range = 100  # How narrow/wide the iron condor is
-        self.target_profit = 0.05  # Target profit as percentage of width
-        
-        # Bollinger Bands parameters
-        self.bollinger_window = 20
-        self.bollinger_std = 2.0
-        self.band_trade_threshold = 0.75  # How close to bands to trigger trades (0-1)
-        
-        # Initialize price history for Bollinger Bands
-        if f"{self.symbol}_price_history" not in self.trader_data:
-            self.trader_data[f"{self.symbol}_price_history"] = deque(maxlen=50)
-        
-        # Delta hedging parameters
-        self.hedge_ratio = 0.5  # How aggressively to hedge delta exposure
-        self.delta_limit = 0.75 * limit  # Maximum tolerated delta exposure
-        
-        # Iron condor state tracking
-        self.leg_positions = {
-            "lower_long": 0,  # Long put further OTM
-            "lower_short": 0,  # Short put closer to ATM
-            "upper_short": 0,  # Short call closer to ATM
-            "upper_long": 0,   # Long call further OTM
-        }
-
-    def black_scholes_call(self, spot_price, strike, time_to_expiry, risk_free_rate, volatility):
-        """Calculate Black-Scholes price for a call option"""
-        if time_to_expiry <= 0:
-            # Option at expiration is worth max(0, spot - strike)
-            return max(0, spot_price - strike)
-        
-        # Black-Scholes formula components
-        d1 = (math.log(spot_price / strike) + (risk_free_rate + 0.5 * volatility**2) * time_to_expiry) / (volatility * math.sqrt(time_to_expiry))
-        d2 = d1 - volatility * math.sqrt(time_to_expiry)
-        
-        # Normal CDF calculation using statistics module
-        nd = NormalDist(mu=0, sigma=1)
-        N_d1 = nd.cdf(d1)
-        N_d2 = nd.cdf(d2)
-        
-        # Call price
-        call_price = spot_price * N_d1 - strike * math.exp(-risk_free_rate * time_to_expiry) * N_d2
-        
-        return call_price
-        
-    def black_scholes_put(self, spot_price, strike, time_to_expiry, risk_free_rate, volatility):
-        """Calculate Black-Scholes price for a put option using put-call parity"""
-        # Put price via put-call parity
-        call_price = self.black_scholes_call(spot_price, strike, time_to_expiry, risk_free_rate, volatility)
-        put_price = call_price + strike * math.exp(-risk_free_rate * time_to_expiry) - spot_price
-        
-        return put_price
-
-    def estimate_implied_volatility(self, market_price, spot_price, strike, time_to_expiry, risk_free_rate, precision=0.001, is_call=True):
-        """Estimate implied volatility using bisection method"""
-        if market_price <= 0:
-            return 0.01  # Minimum volatility floor
+        # Track underlying price and option values
+        self.fair_value = 0
+        self.underlying_price = trader_data.get("VOLCANIC_ROCK_mid_price", 10000)
+        self.option_value = 0
+        self.greeks = {}
+    
+    def update_volatility(self, state):
+        """Update volatility estimate based on recent price movements"""
+        symbol = "VOLCANIC_ROCK"
+        if f"{symbol}_price_history" not in self.trader_data:
+            self.trader_data[f"{symbol}_price_history"] = deque(maxlen=50)
             
-        # Define upper and lower bounds for volatility search
-        vol_low = 0.01
-        vol_high = 2.0
-        
-        # Set initial volatility guess
-        vol_mid = (vol_low + vol_high) / 2
-        
-        # Run bisection algorithm
-        for _ in range(50):  # Maximum 50 iterations
-            if is_call:
-                price = self.black_scholes_call(spot_price, strike, time_to_expiry, risk_free_rate, vol_mid)
-            else:
-                price = self.black_scholes_put(spot_price, strike, time_to_expiry, risk_free_rate, vol_mid)
-            
-            if abs(price - market_price) < precision:
-                return vol_mid
-            
-            if price > market_price:
-                vol_high = vol_mid
-            else:
-                vol_low = vol_mid
-                
-            vol_mid = (vol_low + vol_high) / 2
-            
-        return vol_mid  # Return best approximation
-
-    def calculate_bollinger_bands(self, prices):
-        """Calculate Bollinger Bands from price history"""
-        if len(prices) < 5:
-            # Not enough data points
-            return None, None, None
-            
-        prices_array = np.array(prices)
-        sma = np.mean(prices_array)
-        std_dev = np.std(prices_array)
-        
-        upper_band = sma + self.bollinger_std * std_dev
-        lower_band = sma - self.bollinger_std * std_dev
-        
-        return lower_band, sma, upper_band
-        
-    def calculate_iron_condor_strikes(self, spot_price):
-        """Calculate the four strikes for an iron condor based on current spot price"""
-        # Calculate the 4 strikes for the iron condor
-        lower_long_strike = round(spot_price - self.width - self.narrow_range)
-        lower_short_strike = round(spot_price - self.narrow_range)
-        upper_short_strike = round(spot_price + self.narrow_range)
-        upper_long_strike = round(spot_price + self.width + self.narrow_range)
-        
-        return {
-            "lower_long": lower_long_strike,
-            "lower_short": lower_short_strike, 
-            "upper_short": upper_short_strike,
-            "upper_long": upper_long_strike
-        }
-        
-    def calculate_iron_condor_fair_value(self, spot_price, time_to_expiry, volatility):
-        """Calculate the fair value of an iron condor spread"""
-        strikes = self.calculate_iron_condor_strikes(spot_price)
-        
-        # Calculate prices for each leg
-        lower_long_put = self.black_scholes_put(spot_price, strikes["lower_long"], time_to_expiry, 
-                                               self.risk_free_rate, volatility)
-        lower_short_put = self.black_scholes_put(spot_price, strikes["lower_short"], time_to_expiry, 
-                                                self.risk_free_rate, volatility)
-        upper_short_call = self.black_scholes_call(spot_price, strikes["upper_short"], time_to_expiry, 
-                                                  self.risk_free_rate, volatility)
-        upper_long_call = self.black_scholes_call(spot_price, strikes["upper_long"], time_to_expiry, 
-                                                 self.risk_free_rate, volatility)
-        
-        # Iron condor value = credit received - debit paid
-        # Buy lower_long_put, sell lower_short_put, sell upper_short_call, buy upper_long_call
-        iron_condor_value = (lower_short_put - lower_long_put) + (upper_short_call - upper_long_call)
-        
-        # Store strikes for trading decisions
-        self.trader_data[f"{self.symbol}_ic_strikes"] = strikes
-        
-        return iron_condor_value
-        
-    def evaluate_existing_positions(self, spot_price, time_to_expiry, volatility):
-        """Evaluate profitability of existing iron condor positions"""
-        if "iron_condor_positions" not in self.trader_data:
-            self.trader_data["iron_condor_positions"] = []
-            return None
-            
-        positions = self.trader_data["iron_condor_positions"]
-        total_profit = 0
-        
-        for position in positions:
-            entry_price = position["entry_price"]
-            strikes = position["strikes"]
-            size = position["size"]
-            
-            # Calculate current prices for each leg
-            lower_long_put = self.black_scholes_put(spot_price, strikes["lower_long"], time_to_expiry, 
-                                                  self.risk_free_rate, volatility)
-            lower_short_put = self.black_scholes_put(spot_price, strikes["lower_short"], time_to_expiry, 
-                                                   self.risk_free_rate, volatility)
-            upper_short_call = self.black_scholes_call(spot_price, strikes["upper_short"], time_to_expiry, 
-                                                     self.risk_free_rate, volatility)
-            upper_long_call = self.black_scholes_call(spot_price, strikes["upper_long"], time_to_expiry, 
-                                                    self.risk_free_rate, volatility)
-            
-            # Current iron condor value
-            current_value = (lower_short_put - lower_long_put) + (upper_short_call - upper_long_call)
-            
-            # Calculate profit (for a short iron condor)
-            position_profit = (entry_price - current_value) * size
-            total_profit += position_profit
-            
-            # Update position data
-            position["current_value"] = current_value
-            position["profit"] = position_profit
-            
-        return total_profit
-
-    def fair_price(self, state: TradingState) -> float:
-        """Calculate fair price for the voucher based on our trading approach"""
-        # Get current price of VOLCANIC_ROCK
-        spot_price = None
-        if "VOLCANIC_ROCK" in state.order_depths:
-            rock_depth = state.order_depths["VOLCANIC_ROCK"]
+        # If we have the underlying in the order book, update its price
+        if symbol in state.order_depths:
+            rock_depth = state.order_depths[symbol]
             if len(rock_depth.buy_orders) > 0 and len(rock_depth.sell_orders) > 0:
                 best_bid = max(rock_depth.buy_orders.keys())
                 best_ask = min(rock_depth.sell_orders.keys())
-                spot_price = (best_bid + best_ask) / 2
-        
-        # If we can't determine spot price, try to use historical data or default
-        if spot_price is None:
-            spot_price = self.trader_data.get("VOLCANIC_ROCK_last_price", 10200)
-        
-        # Update spot price in trader data for future reference
-        self.trader_data["VOLCANIC_ROCK_last_price"] = spot_price
-        
-        # Calculate time to expiry in years (assuming 365 days/year)
-        time_to_expiry = (self.days_to_expiry - state.timestamp / 1000000) / 365.0
-        
-        # Calculate if we're a call or put based on our strike price
-        is_call = self.strike_price >= spot_price
-        
-        # Use market prices to estimate implied volatility if possible
-        if len(self.order_depth.buy_orders) > 0 and len(self.order_depth.sell_orders) > 0:
-            market_bid = max(self.order_depth.buy_orders.keys())
-            market_ask = min(self.order_depth.sell_orders.keys())
-            market_price = (market_bid + market_ask) / 2
-            
-            # Add current price to history for Bollinger Bands
-            self.trader_data[f"{self.symbol}_price_history"].append(market_price)
-            
-            # Update volatility estimate based on market prices
-            implied_vol = self.estimate_implied_volatility(
-                market_price, spot_price, self.strike_price, time_to_expiry, self.risk_free_rate, is_call=is_call
-            )
-            
-            # Apply smoothing to volatility updates
-            if f"{self.symbol}_implied_vol" in self.trader_data:
-                old_vol = self.trader_data[f"{self.symbol}_implied_vol"]
-                # Exponential moving average with 0.7 weight to new observation
-                implied_vol = 0.7 * implied_vol + 0.3 * old_vol
-            
-            self.trader_data[f"{self.symbol}_implied_vol"] = implied_vol
-            self.volatility_estimate = implied_vol
-        else:
-            # If no market data, use historical volatility or default
-            self.volatility_estimate = self.trader_data.get(f"{self.symbol}_implied_vol", 0.25)
-        
-        # Calculate option price based on Black-Scholes
-        if is_call:
-            option_price = self.black_scholes_call(
-                spot_price,
-                self.strike_price,
-                time_to_expiry,
-                self.risk_free_rate,
-                self.volatility_estimate
-            )
-        else:
-            option_price = self.black_scholes_put(
-                spot_price,
-                self.strike_price,
-                time_to_expiry,
-                self.risk_free_rate,
-                self.volatility_estimate
-            )
-        
-        # Store the theoretical price for later reference
-        self.trader_data[f"{self.symbol}_theoretical_price"] = option_price
-        
-        # Calculate iron condor value
-        iron_condor_value = self.calculate_iron_condor_fair_value(
-            spot_price, time_to_expiry, self.volatility_estimate)
-        self.trader_data[f"{self.symbol}_ic_value"] = iron_condor_value
-        
-        # Evaluate existing positions
-        position_profit = self.evaluate_existing_positions(
-            spot_price, time_to_expiry, self.volatility_estimate)
-        self.trader_data[f"{self.symbol}_position_profit"] = position_profit
-        
-        # Calculate Bollinger Bands
-        price_history = list(self.trader_data[f"{self.symbol}_price_history"])
-        if len(price_history) >= 5:
-            lower_band, sma, upper_band = self.calculate_bollinger_bands(price_history)
-            self.trader_data[f"{self.symbol}_bb_lower"] = lower_band
-            self.trader_data[f"{self.symbol}_bb_sma"] = sma  
-            self.trader_data[f"{self.symbol}_bb_upper"] = upper_band
-            
-            # Adjust theoretical price based on Bollinger Bands
-            if len(price_history) > self.bollinger_window / 2:
-                last_price = price_history[-1]
-                # If price is near upper band, expect reversion (lower fair value)
-                if upper_band and last_price > sma + (upper_band - sma) * self.band_trade_threshold:
-                    option_price = option_price * 0.98
-                # If price is near lower band, expect reversion (higher fair value)  
-                elif lower_band and last_price < sma - (sma - lower_band) * self.band_trade_threshold:
-                    option_price = option_price * 1.02
-        
-        # Additional metrics for trading decisions
-        self.trader_data[f"{self.symbol}_moneyness"] = spot_price / self.strike_price
-        self.trader_data[f"{self.symbol}_days_to_expiry"] = self.days_to_expiry
-        
-        # Calculate Greeks for position management
-        delta = self.calculate_delta(spot_price, self.strike_price, time_to_expiry, self.risk_free_rate, 
-                                    self.volatility_estimate, is_call)
-        theta = self.calculate_theta(spot_price, self.strike_price, time_to_expiry, self.risk_free_rate, 
-                                    self.volatility_estimate, is_call)
-        gamma = self.calculate_gamma(spot_price, self.strike_price, time_to_expiry, self.risk_free_rate, 
-                                    self.volatility_estimate)
-        
-        self.trader_data[f"{self.symbol}_delta"] = delta
-        self.trader_data[f"{self.symbol}_theta"] = theta
-        self.trader_data[f"{self.symbol}_gamma"] = gamma
-        
-        return option_price
-    
-    def calculate_delta(self, spot_price, strike, time_to_expiry, risk_free_rate, volatility, is_call=True):
-        """Calculate delta (option's sensitivity to underlying price change)"""
-        if time_to_expiry <= 0:
-            if is_call:
-                return 1.0 if spot_price > strike else 0.0
-            else:
-                return -1.0 if spot_price < strike else 0.0
-        
-        d1 = (math.log(spot_price / strike) + (risk_free_rate + 0.5 * volatility**2) * time_to_expiry) / (volatility * math.sqrt(time_to_expiry))
-        nd = NormalDist(mu=0, sigma=1)
-        
-        if is_call:
-            return nd.cdf(d1)
-        else:
-            return nd.cdf(d1) - 1  # Put delta = Call delta - 1
-    
-    def calculate_gamma(self, spot_price, strike, time_to_expiry, risk_free_rate, volatility):
-        """Calculate gamma (rate of change of delta) - same for calls and puts"""
-        if time_to_expiry <= 0:
-            return 0.0
-            
-        d1 = (math.log(spot_price / strike) + (risk_free_rate + 0.5 * volatility**2) * time_to_expiry) / (volatility * math.sqrt(time_to_expiry))
-        
-        # Standard normal PDF
-        pdf_d1 = math.exp(-0.5 * d1**2) / math.sqrt(2 * math.pi)
-        
-        gamma = pdf_d1 / (spot_price * volatility * math.sqrt(time_to_expiry))
-        return gamma
-    
-    def calculate_theta(self, spot_price, strike, time_to_expiry, risk_free_rate, volatility, is_call=True):
-        """Calculate theta (option's time decay)"""
-        if time_to_expiry <= 0:
-            return 0.0
-            
-        d1 = (math.log(spot_price / strike) + (risk_free_rate + 0.5 * volatility**2) * time_to_expiry) / (volatility * math.sqrt(time_to_expiry))
-        d2 = d1 - volatility * math.sqrt(time_to_expiry)
-        
-        nd = NormalDist(mu=0, sigma=1)
-        
-        # Standard normal PDF
-        pdf_d1 = math.exp(-0.5 * d1**2) / math.sqrt(2 * math.pi)
-        
-        # Different calculation for call vs put
-        if is_call:
-            theta = -spot_price * pdf_d1 * volatility / (2 * math.sqrt(time_to_expiry))
-            theta -= risk_free_rate * strike * math.exp(-risk_free_rate * time_to_expiry) * nd.cdf(d2)
-        else:
-            theta = -spot_price * pdf_d1 * volatility / (2 * math.sqrt(time_to_expiry))
-            theta += risk_free_rate * strike * math.exp(-risk_free_rate * time_to_expiry) * nd.cdf(-d2)
-        
-        # Convert to daily theta (from annual)
-        return theta / 365.0
-        
-    def should_open_iron_condor(self, spot_price, option_price):
-        """Determine if we should open a new iron condor position"""
-        # Don't open if we're close to expiration (too risky)
-        if self.days_to_expiry <= 2:
-            return False
-            
-        # Get the iron condor value
-        ic_value = self.trader_data.get(f"{self.symbol}_ic_value", 0)
-        
-        # Width between short strikes
-        strikes = self.trader_data.get(f"{self.symbol}_ic_strikes", {})
-        if not strikes:
-            return False
-            
-        width = strikes["upper_short"] - strikes["lower_short"]
-        
-        # Check if premium is acceptable relative to width
-        # We want to collect at least target_profit * width
-        min_premium = width * self.target_profit
-        
-        # For short iron condor, we want the premium to be high enough
-        if ic_value >= min_premium:
-            # Check if underlying is within acceptable range
-            if (strikes["lower_short"] < spot_price < strikes["upper_short"]):
-                # Don't open too many positions
-                max_positions = 5
-                current_positions = len(self.trader_data.get("iron_condor_positions", []))
-                if current_positions < max_positions:
-                    return True
-                    
-        return False
-        
-    def should_close_iron_condor(self, spot_price):
-        """Determine if we should close existing iron condor positions"""
-        if "iron_condor_positions" not in self.trader_data:
-            return False
-            
-        positions = self.trader_data["iron_condor_positions"]
-        if not positions:
-            return False
-            
-        # Close if we've captured most of the value
-        for position in positions:
-            # For short iron condor, we're profitable when value decreases
-            entry_price = position["entry_price"]
-            current_value = position.get("current_value", entry_price)
-            
-            # Close if we've captured 80% of max profit
-            if current_value <= 0.2 * entry_price:
-                return True
+                mid_price = (best_bid + best_ask) / 2
                 
-            # Close if we're close to expiration
-            if self.days_to_expiry <= 1:
-                return True
+                self.trader_data[f"{symbol}_price_history"].append(mid_price)
+                self.underlying_price = mid_price
+                self.trader_data["VOLCANIC_ROCK_mid_price"] = mid_price
+        
+        # Calculate historical volatility if we have enough data
+        if len(self.trader_data[f"{symbol}_price_history"]) > 5:
+            prices = np.array(list(self.trader_data[f"{symbol}_price_history"]))
+            returns = np.diff(np.log(prices))
+            historical_vol = np.std(returns) * np.sqrt(252)  # Annualized volatility
+            
+            # Smoothly adjust volatility estimate with exponential weighting
+            alpha = 0.7  # Weight for new observation
+            self.volatility = alpha * historical_vol + (1 - alpha) * self.volatility
+            
+            # Ensure volatility is within reasonable bounds
+            self.volatility = min(max(self.volatility, 0.1), 0.8)
+            
+            # Store for future reference
+            self.trader_data[f"{self.symbol}_volatility"] = self.volatility
+    
+    def fair_price(self, state: TradingState) -> float:
+        # Update volatility based on market data
+        self.update_volatility(state)
+        
+        # Convert days to expiry to years
+        T = self.remaining_days / 365
+        
+        # If no days left, option is at intrinsic value
+        if self.remaining_days <= 0:
+            intrinsic_value = max(0, self.underlying_price - self.strike)
+            return intrinsic_value
+        
+        # If underlying price is available, use Black-Scholes to calculate option value
+        if self.underlying_price > 0:
+            S = self.underlying_price
+            K = self.strike
+            r = self.risk_free_rate
+            sigma = self.volatility
+            
+            # Calculate option value
+            self.option_value = black_scholes_call(S, K, T, r, sigma)
+            
+            # Calculate Greeks for risk management
+            self.greeks = calculate_option_greeks(S, K, T, r, sigma)
+            
+            # Store values in trader_data for monitoring
+            self.trader_data[f"{self.symbol}_theoretical_value"] = self.option_value
+            self.trader_data[f"{self.symbol}_delta"] = self.greeks["delta"]
+            self.trader_data[f"{self.symbol}_days_remaining"] = self.remaining_days
+            
+            # Adjust based on time to expiry - be more conservative as expiry approaches
+            if self.remaining_days <= 3:
+                # Calculate intrinsic value (what the option is worth if exercised immediately)
+                intrinsic_value = max(0, S - K)
                 
-            # Close if price moved outside our short strikes (risk management)
-            strikes = position["strikes"]
-            if spot_price <= strikes["lower_short"] or spot_price >= strikes["upper_short"]:
-                # Only close if we're not too far out (might be better to adjust)
-                buffer = 100
-                if (strikes["lower_short"] - buffer <= spot_price <= strikes["upper_short"] + buffer):
-                    return True
-                    
-        return False
-
-    def execute_iron_condor(self, position, is_opening):
-        """Execute orders to open or close an iron condor position"""
+                # For very close to expiry options, adjust pricing
+                if self.remaining_days <= 1:
+                    # On last day, option value converges to intrinsic value
+                    time_weight = 0.2  # 80% intrinsic, 20% theoretical
+                    self.option_value = (intrinsic_value * (1 - time_weight) + 
+                                         self.option_value * time_weight)
+                else:
+                    # As expiry approaches, increase weight of intrinsic value
+                    time_weight = 0.7  # 30% intrinsic, 70% theoretical
+                    self.option_value = (intrinsic_value * (1 - time_weight) + 
+                                         self.option_value * time_weight)
+                
+                # In the last days, if the option is far out of the money, be extra cautious
+                if S < K - 200:
+                    # Deeply OTM options have limited time value
+                    epsilon = 5 if self.remaining_days <= 1 else 10
+                    self.option_value = min(self.option_value, intrinsic_value + epsilon)
+            
+            return self.option_value
+            
+        # If no underlying price available, use market mid price as fair value
+        if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
+            best_ask = min(self.order_depth.sell_orders.keys())
+            best_bid = max(self.order_depth.buy_orders.keys())
+            return (best_ask + best_bid) / 2
+            
+        return None
+    
+    def delta_hedge(self, state: TradingState) -> list[Order]:
+        """Generate orders to delta hedge the option position"""
+        # Only hedge if we have meaningful delta information
+        if not self.greeks.get("delta"):
+            return []
+            
+        position = state.position.get(self.symbol, 0)
+        if position == 0:
+            return []
+            
+        underlying_symbol = "VOLCANIC_ROCK"
+        underlying_position = state.position.get(underlying_symbol, 0)
+        
+        # Calculate target position in underlying to hedge delta
+        # For call options, delta is positive, so we need a negative position in the underlying
+        target_hedge = -position * self.greeks["delta"]
+        hedge_difference = target_hedge - underlying_position
+        
+        # Only adjust if difference is significant
+        if abs(hedge_difference) < 5:
+            return []
+            
         orders = []
         
-        # Get the strikes
-        strikes = position["strikes"]
-        size = position["size"]
-        
-        # For simplicity, we'll simulate the iron condor using a single voucher
-        # This is a simplification since we can't actually trade individual spreads in this game
-        
-        if is_opening:
-            # Opening iron condor is net credit (we receive premium)
-            # We're selling the position, so negative quantity
-            orders.append(Order(self.symbol, round(self.fair_value), -size))  # Added round() here
-        else:
-            # Closing iron condor is a buy (we pay to close)
-            # We're buying back the position, so positive quantity
-            orders.append(Order(self.symbol, round(self.fair_value), size))  # Added round() here
+        # Check if we can place hedging orders
+        if underlying_symbol in state.order_depths:
+            depth = state.order_depths[underlying_symbol]
             
+            if hedge_difference > 0:  # Need to buy underlying
+                if len(depth.sell_orders) > 0:
+                    best_ask = min(depth.sell_orders.keys())
+                    max_qty = min(int(hedge_difference), -depth.sell_orders[best_ask])
+                    if max_qty > 0:
+                        orders.append(Order(underlying_symbol, best_ask, max_qty))
+            
+            elif hedge_difference < 0:  # Need to sell underlying
+                if len(depth.buy_orders) > 0:
+                    best_bid = max(depth.buy_orders.keys())
+                    max_qty = min(int(-hedge_difference), depth.buy_orders[best_bid])
+                    if max_qty > 0:
+                        orders.append(Order(underlying_symbol, best_bid, -max_qty))
+                        
+        return orders
+    
+    def act(self, state: TradingState):
+        self.fair_value = self.fair_price(state)
+        position = state.position.get(self.symbol, 0)
+        buy_order_volume = 0
+        sell_order_volume = 0
+        
+        orders = {self.symbol: [], "VOLCANIC_ROCK": []}
+        
+        # Generate delta hedging orders for the underlying
+        hedge_orders = self.delta_hedge(state)
+        if hedge_orders:
+            orders["VOLCANIC_ROCK"].extend(hedge_orders)
+        
+        # Check if we have a valid fair price
+        if self.fair_value is None:
+            # Fall back to standard market making if no fair price available
+            take, buy_order_volume, sell_order_volume = self.take_orders(position, 0, 0)
+            clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
+            make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
+            orders[self.symbol].extend(take + clear + make)
+            return orders
+        
+        # Use enhanced take orders based on theoretical value
+        if len(self.order_depth.sell_orders) != 0:
+            best_ask = min(self.order_depth.sell_orders.keys())
+            best_ask_amount = -self.order_depth.sell_orders[best_ask]
+            
+            # Buy when market price is significantly below theoretical value
+            if best_ask <= self.fair_value * 0.95:
+                quantity = min(best_ask_amount, self.limit - position)
+                if quantity > 0:
+                    orders[self.symbol].append(Order(self.symbol, best_ask, quantity))
+                    buy_order_volume += quantity
+        
+        if len(self.order_depth.buy_orders) != 0:
+            best_bid = max(self.order_depth.buy_orders.keys())
+            best_bid_amount = self.order_depth.buy_orders[best_bid]
+            
+            # Sell when market price is significantly above theoretical value
+            if best_bid >= self.fair_value * 1.05:
+                quantity = min(best_bid_amount, self.limit + position)
+                if quantity > 0:
+                    orders[self.symbol].append(Order(self.symbol, best_bid, -quantity))
+                    sell_order_volume += quantity
+        
+        # Add market making orders
+        # Position-aware edge adjustment
+        position_ratio = abs(position) / self.limit
+        edge_adjustment = int(position_ratio * 3)
+        
+        # Time-aware edge adjustment - widen spreads as expiry approaches
+        time_factor = max(1, 3 - self.remaining_days * 0.3)
+        
+        ask_edge = max(1, self.default_edge + edge_adjustment)
+        bid_edge = max(1, self.default_edge + edge_adjustment)
+        
+        if position > 0:
+            ask_edge = max(1, ask_edge - 1)  # Tighten ask to sell more
+        elif position < 0:
+            bid_edge = max(1, bid_edge - 1)  # Tighten bid to buy more
+        
+        # Scale by time factor
+        ask_edge = int(ask_edge * time_factor)
+        bid_edge = int(bid_edge * time_factor)
+        
+        ask = round(self.fair_value + ask_edge)
+        bid = round(self.fair_value - bid_edge)
+        
+        # Calculate order sizes with position management
+        remaining_buy_capacity = self.limit - (position + buy_order_volume)
+        remaining_sell_capacity = self.limit + (position - sell_order_volume)
+        
+        scaling_factor = max(0.3, 1.0 - position_ratio)
+        
+        buy_qty = min(remaining_buy_capacity, max(1, int(self.limit * 0.2 * scaling_factor)))
+        if buy_qty > 0 and bid < ask:
+            orders[self.symbol].append(Order(self.symbol, bid, buy_qty))
+        
+        sell_qty = min(remaining_sell_capacity, max(1, int(self.limit * 0.2 * scaling_factor)))
+        if sell_qty > 0 and ask > bid:
+            orders[self.symbol].append(Order(self.symbol, ask, -sell_qty))
+        
         return orders
         
-    def adjust_parameters_for_strike(self):
-        """Adjust strategy parameters based on our specific strike price"""
-        # This depends on which voucher we're trading
-        spot_price = self.trader_data.get("VOLCANIC_ROCK_last_price", 10000)
-        moneyness = spot_price / self.strike_price
-        
-        # Adjust iron condor width based on strike and days to expiry
-        if self.days_to_expiry <= 2:
-            # Narrower condor close to expiry
-            self.width = 150
-            self.narrow_range = 75
-        elif 0.95 <= moneyness <= 1.05:
-            # Near ATM, use standard width
-            self.width = 200
-            self.narrow_range = 100
-        else:
-            # Far OTM/ITM, wider condor
-            self.width = 250
-            self.narrow_range = 150
-    
-    def act(self, state: TradingState):
-        # Calculate fair value of our option
-        self.fair_value = self.fair_price(state)
-        
-        # Get current position as integer
-        position_int = state.position.get(self.symbol, 0)
-        
-        # Get volcanic rock price
-        spot_price = self.trader_data.get("VOLCANIC_ROCK_last_price", 10200)
-        
-        # Adjust parameters based on strike price
-        self.adjust_parameters_for_strike()
-        
-        # Iron condor logic
-        if "iron_condor_positions" not in self.trader_data:
-            self.trader_data["iron_condor_positions"] = []
-            
-        # Check if we should open or close iron condor positions
-        open_new = self.should_open_iron_condor(spot_price, self.fair_value)
-        close_existing = self.should_close_iron_condor(spot_price)
-        
-        iron_condor_orders = []
-        
-        if open_new:
-            # Calculate size based on available position limit
-            available_capacity = int((self.limit - abs(position_int)) * 0.5)  # Use at most 50% of remaining capacity
-            if available_capacity >= 10:
-                # Create new position
-                new_position = {
-                    "entry_price": self.trader_data.get(f"{self.symbol}_ic_value", 0),
-                    "strikes": self.trader_data.get(f"{self.symbol}_ic_strikes", {}),
-                    "size": min(available_capacity, 20),  # Cap at 20 contracts per iron condor
-                    "entry_time": state.timestamp
-                }
-                
-                # Execute orders
-                ic_orders = self.execute_iron_condor(new_position, True)
-                iron_condor_orders.extend(ic_orders)
-                
-                # Save position
-                self.trader_data["iron_condor_positions"].append(new_position)
-                
-        if close_existing:
-            positions = self.trader_data["iron_condor_positions"]
-            for i, position in enumerate(positions):
-                # Execute orders to close
-                ic_orders = self.execute_iron_condor(position, False)
-                iron_condor_orders.extend(ic_orders)
-                
-            # Clear closed positions
-            if close_existing:
-                self.trader_data["iron_condor_positions"] = []
-                
-        # Market making component - supplement iron condor strategy with regular market making
-        buy_order_volume = 0
-        sell_order_volume = 0
-        
-        # For orders already generated by iron condor strategy, track their volumes
-        for order in iron_condor_orders:
-            if order.quantity > 0:
-                buy_order_volume += order.quantity
-            else:
-                sell_order_volume += abs(order.quantity)
-        
-        # Calculate remaining capacity for market making
-        position_after_ic = position_int + buy_order_volume - sell_order_volume
-        
-        # Regular market making
-        take, buy_order_volume, sell_order_volume = self.take_orders(position_after_ic, buy_order_volume, sell_order_volume)
-        clear, buy_order_volume, sell_order_volume = self.clear_orders(position_after_ic, buy_order_volume, sell_order_volume)
-        make, _, _ = self.make_orders(position_after_ic, buy_order_volume, sell_order_volume)
-        
-        # Combine all orders
-        all_orders = iron_condor_orders + take + clear + make
-        
-        return {self.symbol: all_orders}
-
-    def adjust_parameters(self, delta, moneyness):
-        """Adjust strategy parameters based on option characteristics"""
-        # This method should be overridden by child classes
-        # For standard case, use delta-based position limits
-        if delta > 0.7:
-            self.soft_position_limit = int(self.limit * 0.6)
-        elif delta < 0.3:
-            self.soft_position_limit = int(self.limit * 0.9)
-        else:
-            self.soft_position_limit = int(self.limit * 0.8)
-
-class Voucher9500Strategy(BaseVolcanicRockVoucherStrategy):
-    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
-        super().__init__(symbol, limit, order_depth, trader_data)
-        # Deep ITM parameters
-        self.bollinger_std = 2.2  # Wider bands for ITM options
-        self.band_trade_threshold = 0.8  # More conservative mean reversion
-        self.hedge_ratio = 0.7  # Higher hedge ratio for high delta options
-    
-    def adjust_parameters(self, delta, moneyness):
-        # ITM options - adjust for high delta
-        self.soft_position_limit = int(self.limit * 0.55)  # More conservative
-        self.take_width = 1  # Tighter spreads
-        self.clear_width = 0  # Aggressive clearing
-        self.default_edge = 1
-        
-        # Adjust for gamma risk which is lower for deep ITM
-        gamma = self.trader_data.get(f"{self.symbol}_gamma", 0)
-        if gamma < 0.0001:
-            self.take_width = 0  # Very tight spreads for low gamma (less risk)
-
-
-class Voucher9750Strategy(BaseVolcanicRockVoucherStrategy):
-    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
-        super().__init__(symbol, limit, order_depth, trader_data)
-        # Slightly ITM parameters
-        self.bollinger_std = 2.1
-        self.volatility_estimate = 0.28  # Slightly higher vol estimate
-    
-    def adjust_parameters(self, delta, moneyness):
-        # Slightly ITM options
-        self.soft_position_limit = int(self.limit * 0.65)
-        self.take_width = 1
-        self.clear_width = 0
-
-
-class Voucher10000Strategy(BaseVolcanicRockVoucherStrategy):
-    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
-        super().__init__(symbol, limit, order_depth, trader_data)
-        # ATM parameters - highest gamma
-        self.bollinger_std = 1.8  # Tighter bands for ATM (more volatile)
-        self.band_trade_threshold = 0.7
-        self.volatility_estimate = 0.3  # Higher vol for ATM
-    
-    def adjust_parameters(self, delta, moneyness):
-        # ATM options - highest gamma risk
-        gamma = self.trader_data.get(f"{self.symbol}_gamma", 0)
-        
-        # Adjust based on moneyness
-        if 0.98 <= moneyness <= 1.02:  # Very close to ATM
-            self.soft_position_limit = int(self.limit * 0.6)  # More conservative for high gamma
-            self.take_width = 2  # Wider spread for gamma risk
-            self.clear_width = 1
-            self.default_edge = 2
-        else:
-            self.soft_position_limit = int(self.limit * 0.7)
-            self.take_width = 1
-            self.default_edge = 1
-
-class Voucher10250Strategy(BaseVolcanicRockVoucherStrategy):
-    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
-        super().__init__(symbol, limit, order_depth, trader_data)
-        # Slightly OTM parameters
-        self.bollinger_std = 2.0
-        self.volatility_estimate = 0.27
-        self.bollinger_window = 15  # Shorter window for faster reactions
-    
-    def adjust_parameters(self, delta, moneyness):
-        # Slightly OTM options
-        if delta < 0.4:
-            self.soft_position_limit = int(self.limit * 0.75)
-            self.take_width = 1
-            self.clear_width = 1
-
-class Voucher10500Strategy(BaseVolcanicRockVoucherStrategy):
-    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
-        super().__init__(symbol, limit, order_depth, trader_data)
-        # Deep OTM parameters 
-        self.bollinger_std = 2.5  # Wider bands for less liquid options
-        self.band_trade_threshold = 0.85  # More conservative for OTM
-        self.bollinger_window = 10  # Shorter lookback
-    
-    def adjust_parameters(self, delta, moneyness):
-        # Deep OTM options - can be more aggressive with position
-        if self.days_to_expiry <= 2 and delta < 0.1:
-            # Very little time value left for deep OTM
-            self.soft_position_limit = int(self.limit * 0.5)
-            self.take_width = 3  # Wider spreads, less trading
-            self.clear_width = 2
-        else:
-            self.soft_position_limit = int(self.limit * 0.85)
-            self.take_width = 2
-            self.clear_width = 1
-
-class VolcanicRockSmileStrategy(MarketMakeStrategy):
+class VolcanicRockStrategy(MarketMakeStrategy):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
         super().__init__(symbol, limit, order_depth, trader_data)
         
-        # Strategy parameters
+        # Market making parameters
         self.take_width = 2
         self.clear_width = 1
-        self.disregard_edge = 2
-        self.join_edge = 1 
-        self.default_edge = 3
+        self.join_edge = 1
+        self.default_edge = 2
         self.prevent_adverse = True
+        self.adverse_volume = 10
+        self.soft_position_limit = int(limit * 0.7)
         
-        # Volatility smile parameters
-        self.smile_a = 0.2373  # x^2 coefficient
-        self.smile_b = 0.0029  # x coefficient
-        self.smile_c = 0.1492  # constant term
+        # For tracking
+        self.fair_value = 0
         
-        # Risk management parameters
-        self.skew_threshold = 0.02  # Threshold for significant skew
-        self.vol_multiplier = 25  # How much to scale volatility for position sizing
-        
-        # Initialize volatility tracking
-        if "vol_surface" not in self.trader_data:
-            self.trader_data["vol_surface"] = {}
-    
-    def calculate_implied_vol(self, moneyness):
-        """Calculate implied volatility from moneyness using smile equation"""
-        x = moneyness - 1.0  # Convert to normalized moneyness
-        return self.smile_a * (x**2) + self.smile_b * x + self.smile_c
-    
-    def estimate_skew_and_convexity(self, spot_price):
-        """Calculate volatility skew (smile asymmetry) and convexity"""
-        # Use voucher strikes to sample the volatility surface
-        strikes = [9500, 9750, 10000, 10250, 10500]
-        vols = []
-        
-        for strike in strikes:
-            moneyness = spot_price / strike
-            vol = self.calculate_implied_vol(moneyness)
-            vols.append(vol)
-            self.trader_data["vol_surface"][strike] = vol
-        
-        # Calculate skew from left and right wing difference
-        if len(vols) >= 5:
-            left_wing = vols[0] - vols[2]  # Vol(9500) - Vol(10000)
-            right_wing = vols[4] - vols[2]  # Vol(10500) - Vol(10000)
-            skew = left_wing - right_wing
-            convexity = vols[0] + vols[4] - 2*vols[2]  # Approx. of second derivative
-            
-            self.trader_data["vol_skew"] = skew
-            self.trader_data["vol_convexity"] = convexity
-            return skew, convexity
-            
-        return 0, 0
-    
     def fair_price(self, state: TradingState) -> float:
-        """Calculate fair price using market mid and volatility information"""
-        # Get current market mid price
-        if len(self.order_depth.sell_orders) == 0 or len(self.order_depth.buy_orders) == 0:
-            return self.trader_data.get("VOLCANIC_ROCK_last_fair", 10000)
+        """Calculate fair price for volcanic rock based on order book"""
+        if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
+            best_ask = min(self.order_depth.sell_orders.keys())
+            best_bid = max(self.order_depth.buy_orders.keys())
             
-        best_bid = max(self.order_depth.buy_orders.keys())
-        best_ask = min(self.order_depth.sell_orders.keys())
-        mid_price = (best_bid + best_ask) / 2
-        
-        # Track current ATM volatility (at K=10000)
-        atm_moneyness = mid_price / 10000
-        atm_vol = self.calculate_implied_vol(atm_moneyness)
-        self.trader_data["atm_vol"] = atm_vol
-        
-        # Calculate volatility skew and convexity
-        skew, convexity = self.estimate_skew_and_convexity(mid_price)
-        
-        # Adjust fair price based on skew (volatility smile asymmetry)
-        # Positive skew (left wing higher than right) suggests downward pressure
-        # Negative skew (right wing higher than left) suggests upward pressure
-        skew_adjustment = -skew * self.skew_threshold * mid_price
-        
-        # The adjustment is negative when skew is positive (downward pressure)
-        # and positive when skew is negative (upward pressure)
-        fair_price = mid_price + skew_adjustment
-        
-        self.trader_data["VOLCANIC_ROCK_last_fair"] = fair_price
-        return fair_price
+            # Simple mid price
+            fair = (best_ask + best_bid) / 2
+            
+            # Store price history for volatility estimation
+            if "VOLCANIC_ROCK_price_history" not in self.trader_data:
+                self.trader_data["VOLCANIC_ROCK_price_history"] = deque(maxlen=50)
+            
+            self.trader_data["VOLCANIC_ROCK_price_history"].append(fair)
+            self.trader_data["VOLCANIC_ROCK_mid_price"] = fair
+            
+            return fair
+        return None
     
     def act(self, state: TradingState):
-        # Calculate fair value
         self.fair_value = self.fair_price(state)
         position = state.position.get(self.symbol, 0)
         
-        # Adjust position sizing based on ATM volatility
-        atm_vol = self.trader_data.get("atm_vol", 0.20)
-        skew = self.trader_data.get("vol_skew", 0)
+        # Check if we need to adjust strategy based on options exposure
+        net_delta = 0
+        for voucher in ["VOLCANIC_ROCK_VOUCHER_9500", "VOLCANIC_ROCK_VOUCHER_9750", 
+                        "VOLCANIC_ROCK_VOUCHER_10000", "VOLCANIC_ROCK_VOUCHER_10250", 
+                        "VOLCANIC_ROCK_VOUCHER_10500"]:
+            voucher_delta = self.trader_data.get(f"{voucher}_delta", 0)
+            voucher_position = state.position.get(voucher, 0)
+            net_delta += voucher_delta * voucher_position
         
-        # Reduce position size when volatility is high
-        vol_factor = max(0.4, min(1.0, 1.0 - (atm_vol - 0.15) * self.vol_multiplier))
-        self.soft_position_limit = int(self.limit * vol_factor)
+        # Adjust position limit based on options exposure
+        effective_position = position + net_delta
         
-        # Adjust trading parameters based on skew and volatility
-        if abs(skew) > self.skew_threshold:
-            # When skew is significant, be more aggressive with clearing
-            self.clear_width = 0
-            if skew > 0:  # Downward pressure - prefer selling
-                self.take_width = 1  # Lower threshold to take sell orders
-            else:  # Upward pressure - prefer buying
-                self.take_width = 1  # Lower threshold to take buy orders
-        else:
-            # Normal market conditions
-            self.clear_width = 1
-            self.take_width = 2
-        
-        # Standard market making
         buy_order_volume = 0
         sell_order_volume = 0
-        take, buy_order_volume, sell_order_volume = self.take_orders(
-            position, buy_order_volume, sell_order_volume)
-        clear, buy_order_volume, sell_order_volume = self.clear_orders(
-            position, buy_order_volume, sell_order_volume)
-        make, _, _ = self.make_orders(
-            position, buy_order_volume, sell_order_volume)
         
-        all_orders = take + clear + make
-        return {self.symbol: all_orders}
-
-class MagnificentMacaronsStrategy:
-    def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
-        self.symbol = symbol
-        self.limit = limit
-        self.soft_position_limit = int(limit * 0.8)  # soft cap for market making
-        self.order_depth = order_depth
-        self.trader_data = trader_data
-
-        self.conversion_limit = 10  # Max units you can convert in/out via Pristine Cuisine per timestamp
-
-        # Cost parameters - assumed or from constants/config (can update live if available)
-        self.transport_fee = 1.0  # per unit
-        self.import_tariff = 0.5  # per unit
-        self.export_tariff = 0.5  # per unit
-        self.storage_cost = 0.1   # per unit, per timestamp
-
-        self.base_fair_value = 1000  # default fair value
-
-    def conversion_arbitrage(self, state: TradingState):
-        """Improved conversion logic: size and trigger depend on premium/discount."""
-        """Improved conversion logic with fundamental value filtering."""
-        conversions = 0
-        conv = state.observations.conversionObservations.get(self.symbol)
-        if not conv:
-            return conversions
-
-        true_buy_cost = conv.askPrice + conv.transportFees + conv.importTariff
-        true_sell_value = conv.bidPrice - conv.transportFees - conv.exportTariff
-
-        if self.order_depth.buy_orders and self.order_depth.sell_orders:
-            best_bid = max(self.order_depth.buy_orders.keys())
-            best_ask = min(self.order_depth.sell_orders.keys())
-            market_mid = (best_bid + best_ask) / 2
-        else:
-            return conversions
-
-        position = state.position.get(self.symbol, 0)
-        pristine_mid = (conv.bidPrice + conv.askPrice) / 2
-        price_gap = market_mid - pristine_mid
+        # Use all three order types: taking, clearing, and making
+        take, buy_order_volume, sell_order_volume = self.take_orders(effective_position, buy_order_volume, sell_order_volume)
+        clear, buy_order_volume, sell_order_volume = self.clear_orders(effective_position, buy_order_volume, sell_order_volume)
+        make, _, _ = self.make_orders(effective_position, buy_order_volume, sell_order_volume)
+    
+        # Combine all order types
+        return {self.symbol: take + clear + make}
         
-        # Compute fundamental value directly from conv fields
-        fundamental_value = (
-            -5.0 * getattr(conv, "sunlightIndex", 0)
-            + 3.0 * getattr(conv, "sugarPrice", 0)
-            + 2.0 * getattr(conv, "transportFees", 0)
-            + 1.5 * getattr(conv, "importTariff", 0)
-            + 1.0 * getattr(conv, "exportTariff", 0)
-        )
-
-        # Require that market price is favorable compared to fundamentals
-        if market_mid > true_buy_cost + 1 and market_mid > fundamental_value:
-            max_convert = max(1, int(min(self.conversion_limit, self.limit - position)))
-            conversions = min(max_convert, int(price_gap / 2))
-        elif market_mid < true_sell_value - 1 and market_mid < fundamental_value:
-            max_convert = max(1, int(min(self.conversion_limit, self.limit + position)))
-            conversions = -min(max_convert, int(abs(price_gap) / 2))
-
-        return conversions
-
-        # true_buy_cost = conv.askPrice + self.transport_fee + self.import_tariff
-        # true_sell_value = conv.bidPrice - self.transport_fee - self.export_tariff
-
-        # if self.order_depth.buy_orders and self.order_depth.sell_orders:
-        #     best_bid = max(self.order_depth.buy_orders.keys())
-        #     best_ask = min(self.order_depth.sell_orders.keys())
-        #     market_mid = (best_bid + best_ask) / 2
-        # else:
-        #     return conversions
-
-        # position = state.position.get(self.symbol, 0)
-        # pristine_mid = (conv.bidPrice + conv.askPrice) / 2
-        # price_gap = market_mid - pristine_mid
-
-        # if market_mid > true_buy_cost + 1:
-        #     max_convert = max(1, int(min(self.conversion_limit, self.limit - position)))
-        #     conversions = min(max_convert, int(price_gap / 2))  # scale with premium
-        # elif market_mid < true_sell_value - 1:
-        #     max_convert = max(1, int(min(self.conversion_limit, self.limit + position)))
-        #     conversions = -min(max_convert, int(abs(price_gap) / 2))
-
-        # return conversions
-
-    def fair_price(self, state: TradingState) -> float:
-        """Estimate a fair value using market data and fundamentals."""
-        if self.order_depth.buy_orders and self.order_depth.sell_orders:
-            best_bid = max(self.order_depth.buy_orders.keys())
-            best_ask = min(self.order_depth.sell_orders.keys())
-            market_mid = (best_bid + best_ask) / 2
-        else:
-            market_mid = self.base_fair_value
-
-        # Adjust fair value if we're long to avoid accumulating storage cost
-        position = state.position.get(self.symbol, 0)
-        time_penalty = self.storage_cost * max(position, 0)
-
-        # Incorporate fundamental signals from ConversionObservation
-        conv = state.observations.conversionObservations.get(self.symbol)
-        if conv and hasattr(conv, "observations"):
-            obs = conv.observations
-            fundamental_value = (
-                -5.0 * obs.get("sunlightHours", 0)
-                + 3.0 * obs.get("sugarPrice", 0)
-                + 2.0 * obs.get("shippingCost", 0)
-                + 1.5 * obs.get("tariffRate", 0)
-                + 1.0 * obs.get("storageIndex", 0)
-            )
-            # Blend with market mid to avoid overreaction
-            market_mid = 0.7 * market_mid + 0.3 * fundamental_value
-
-        return market_mid - time_penalty
-
-    def act(self, state: TradingState) -> dict[str, list[Order]]:
-        position = state.position.get(self.symbol, 0)
-        fair_value = self.fair_price(state)
-
-        orders = []
-
-        # Calculate dynamic edge based on spread to Pristine Cuisine
-        conv = state.observations.conversionObservations.get(self.symbol)
-        if conv:
-            pristine_mid = (conv.bidPrice + conv.askPrice) / 2
-            market_edge = abs(fair_value - pristine_mid)
-            edge = max(1, min(4, int(market_edge)))
-        else:
-            edge = 1
-
-        bid_price = int(fair_value - edge)
-        ask_price = int(fair_value + edge)
-
-        # Dynamic sizing: scale down near limits
-        aggression = max(0.3, 1.0 - abs(position) / self.soft_position_limit)
-        max_size = int(self.soft_position_limit * aggression)
-        bid_size = min(self.soft_position_limit - position, max(1, max_size // 2))
-        ask_size = min(self.soft_position_limit + position, max(1, max_size // 2))
-
-        if bid_size > 0:
-            orders.append(Order(self.symbol, bid_price, bid_size))
-        if ask_size > 0:
-            orders.append(Order(self.symbol, ask_price, -ask_size))
-
-        return {self.symbol: orders}
-
-    def convert(self, state: TradingState) -> int:
-        """Return signed conversion quantity to execute."""
-        return self.conversion_arbitrage(state)
-
 class Trader:
+
     def __init__(self):
         self.limits = {
             "RAINFOREST_RESIN": 50,
@@ -1791,49 +1239,50 @@ class Trader:
             "VOLCANIC_ROCK": 400,
             "VOLCANIC_ROCK_VOUCHER_9500": 200,
             "VOLCANIC_ROCK_VOUCHER_9750": 200,
-            "VOLCANIC_ROCK_VOUCHER_10000": 200,
+            "VOLCANIC_ROCK_VOUCHER_10000": 200, 
             "VOLCANIC_ROCK_VOUCHER_10250": 200,
-            "VOLCANIC_ROCK_VOUCHER_10500": 200,
-            "MAGNIFICENT_MACARONS": 75,
+            "VOLCANIC_ROCK_VOUCHER_10500": 200
         }
 
     def run(self, state : TradingState) -> tuple[dict[Symbol, list[Order]], int , str]:
         trader_data = {}
         if state.traderData != None and state.traderData != "":
             trader_data = jsonpickle.decode(state.traderData)
-        
-        # Create mapping of symbols to their strategy constructors
-        strategies = {symbol: constructor(symbol, self.limits[symbol], state.order_depths[symbol], trader_data) 
-            for symbol, constructor in {
+            
+        # # Track the current round for option expiration tracking
+        # if "current_round" not in trader_data:
+        #     trader_data["current_round"] = 1
+        # else:
+        #     trader_data["current_round"] += 1
+            
+        strategies = {symbol: constructor(symbol, self.limits[symbol], state.order_depths[symbol], trader_data) for symbol, constructor in {
                 # "RAINFOREST_RESIN": ResinStrategy, 
                 # "KELP": KelpStrategy, 
                 # "SQUID_INK": SquidInkStrategy,
                 # "PICNIC_BASKET1": PicnicBasket1Strategy, 
                 # "PICNIC_BASKET2": PicnicBasket2Strategy,
-                # "VOLCANIC_ROCK": VolcanicRockSmileStrategy,
-                # "VOLCANIC_ROCK_VOUCHER_9500": Voucher9500Strategy,
-                # "VOLCANIC_ROCK_VOUCHER_9750": Voucher9750Strategy,
-                # "VOLCANIC_ROCK_VOUCHER_10000": Voucher10000Strategy,
-                # "VOLCANIC_ROCK_VOUCHER_10250": Voucher10250Strategy,
-                # "VOLCANIC_ROCK_VOUCHER_10500": Voucher10500Strategy,
-                "MAGNIFICENT_MACARONS": MagnificentMacaronsStrategy,
-            }.items() if symbol in state.order_depths}
-        
+                # "VOLCANIC_ROCK": VolcanicRockStrategy,
+                "VOLCANIC_ROCK_VOUCHER_9500": VolcanicRockVoucherStrategy,
+                "VOLCANIC_ROCK_VOUCHER_9750": VolcanicRockVoucherStrategy,
+                "VOLCANIC_ROCK_VOUCHER_10000": VolcanicRockVoucherStrategy,
+                "VOLCANIC_ROCK_VOUCHER_10250": VolcanicRockVoucherStrategy,
+                "VOLCANIC_ROCK_VOUCHER_10500": VolcanicRockVoucherStrategy
+            }.items() if symbol in state.order_depths
+        }
+            
         conversions = 0
         orders = {}
         
+        # Process all strategies
         for symbol, strategy in strategies.items():
             if symbol in state.order_depths:
                 orders_dict = strategy.act(state)
-                for symbol, order_list in orders_dict.items():
-                    orders[symbol] = order_list
-
-                # If the strategy supports conversion, apply it
-                if hasattr(strategy, "convert"):
-                    conversions += strategy.convert(state)
-                    
+                # Merge orders from each strategy
+                for s, order_list in orders_dict.items():
+                    if s not in orders:
+                        orders[s] = []
+                    orders[s].extend(order_list)
+        
         new_trader_data = jsonpickle.encode(trader_data)
-
         logger.flush(state, orders, conversions, new_trader_data)
-        f.write(f"Conversions: {conversions}\n")
         return orders, conversions, new_trader_data
