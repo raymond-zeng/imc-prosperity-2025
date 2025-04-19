@@ -5,12 +5,10 @@ import math
 from collections import deque
 from statistics import NormalDist
 
-# f = open("test.txt", "w")
+f = open("test.txt", "w")
 import json
 from typing import Any
 from datamodel import Listing, Observation, Order, OrderDepth, ProsperityEncoder, Symbol, Trade, TradingState
-
-f = open("test.txt", "w")
 
 class Logger:
     def __init__(self) -> None:
@@ -57,7 +55,7 @@ class Logger:
             self.compress_listings(state.listings),
             self.compress_order_depths(state.order_depths),
             self.compress_trades(state.own_trades),
-            self.compress_trades(state.market_trades),
+            [], # self.compress_trades(state.market_trades),
             state.position,
             self.compress_observations(state.observations),
         ]
@@ -181,6 +179,7 @@ class MarketMakeStrategy():
         # Check if any sell orders exist: these are offers to sell at various prices.
         if len(self.order_depth.sell_orders) != 0:
             # Find the best ask (lowest sell price)
+            
             best_ask = min(self.order_depth.sell_orders.keys())
             # Multiply by -1 because the sell order volumes are stored as negative values
             best_ask_amount = -1 * self.order_depth.sell_orders[best_ask]
@@ -475,18 +474,23 @@ class SquidInkStrategy(MarketMakeStrategy):
                 if qty > 0:
                     orders.append(Order(self.symbol, best_ask, qty))
                     buy_order_volume += qty
+                    self.order_depth.sell_orders[best_ask] -= qty
+                    if self.order_depth.sell_orders[best_ask] == 0:
+                        del self.order_depth.sell_orders[best_ask]
             elif signal == "SELL":
                 best_bid = max(self.order_depth.buy_orders.keys())
                 qty = min(self.limit + position, self.order_depth.buy_orders[best_bid])
                 if qty > 0:
                     orders.append(Order(self.symbol, best_bid, -qty))
                     sell_order_volume += qty
+                    self.order_depth.buy_orders[best_bid] -= qty
+                    if self.order_depth.buy_orders[best_bid] == 0:
+                        del self.order_depth.buy_orders[best_bid]
         
         clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
         make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
         return {self.symbol: orders + clear + make}
     
-
 class PicnicBasketStrategy(MarketMakeStrategy):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
         # components = ["CROISSANTS", "JAMS", "DJEMBES"]
@@ -854,7 +858,7 @@ class PicnicBasket1Strategy(PicnicBasketStrategy):
         self.component_reversion_strength = 0.  # How strongly to revert to component value
         self.prevent_adverse = True
         self.adverse_volume = 15  # Avoid thin liquidity
-        self.soft_position_limit = int(self.limit * 6)
+        # self.soft_position_limit = int(self.limit * 6)
 
 class PicnicBasket2Strategy(PicnicBasketStrategy):
     components = []
@@ -870,20 +874,29 @@ class PicnicBasket2Strategy(PicnicBasketStrategy):
         self.arb_threshold = 1  # Tighter threshold for more aggressive mean reversion
         self.component_reversion_strength = 0.4  # How strongly to revert to component value
         self.prevent_adverse = True
-        self.adverse_volume = 15  # Avoid thin liquidity
-        self.soft_position_limit = int(self.limit * 0.85)
+        self.adverse_volume = 40  # Avoid thin liquidity
+        # self.soft_position_limit = int(self.limit * 0.85)
 
 class VolcanicRockOptionsStrategy(MarketMakeStrategy):
 
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
         super().__init__(symbol, limit, order_depth, trader_data)
         self.strike_price = int(symbol.split("_")[-1])
-        self.threshold = 0.07
+        self.threshold = 0.01
         self.days_to_expiry = 5
+        self.take_width = 1
+        self.clear_width = 0
+        self.disregard_edge = 1
+        self.join_edge = 1
+        self.default_edge = 2
+        self.adverse_volume = 15  # Avoid thin liquidity
+        self.net_delta = 0.0
+        self.rock_limit = 400
+        # self.soft_position_limit = int(self.limit * 0.85)
 
-    def black_scholes(self, spot_price, strike, time_to_expiry, risk_free_rate, volatility):
+    def black_scholes_calls(self, spot_price, strike, time_to_expiry, risk_free_rate, volatility):
         if time_to_expiry <= 0:
-            return max(0, spot_price - strike), 1.0
+            return max(0, spot_price - strike)
         d1 = (math.log(spot_price / strike) + (risk_free_rate + 0.5 * volatility**2) * time_to_expiry) / (volatility * math.sqrt(time_to_expiry))
         d2 = d1 - volatility * math.sqrt(time_to_expiry)
         nd = NormalDist(mu=0, sigma=1)
@@ -891,6 +904,27 @@ class VolcanicRockOptionsStrategy(MarketMakeStrategy):
         N_d2 = nd.cdf(d2)
         return spot_price * N_d1 - strike * math.exp(-risk_free_rate * time_to_expiry) * N_d2
     
+    def black_scholes_puts(self, spot_price, strike, time_to_expiry, risk_free_rate, volatility):
+        if time_to_expiry <= 0:
+            return max(0, strike - spot_price)
+        d1 = (math.log(spot_price / strike) + (risk_free_rate + 0.5 * volatility**2) * time_to_expiry) / (volatility * math.sqrt(time_to_expiry))
+        d2 = d1 - volatility * math.sqrt(time_to_expiry)
+        nd = NormalDist(mu=0, sigma=1)
+        N_d1 = nd.cdf(-d1)
+        N_d2 = nd.cdf(-d2)
+        return strike * math.exp(-risk_free_rate * time_to_expiry) * N_d2 - spot_price * N_d1
+    
+    def smile_volatility(self, moneyness):
+        return 0.2487 * np.square(moneyness) + 0.00805 * moneyness + 0.14899
+        
+    def fair_price(self, spot_price, strike, time_to_expiry, risk_free_rate):
+        moneyness = np.log(strike / spot_price) / np.sqrt(time_to_expiry)
+        volatility = self.smile_volatility(moneyness)
+        # if strike < spot_price:
+        #     put_price = self.black_scholes_puts(spot_price, strike, time_to_expiry, risk_free_rate, volatility)
+        #     return put_price + spot_price - strike
+        return self.black_scholes_calls(spot_price, strike, time_to_expiry, risk_free_rate, volatility)
+        
     def delta(self, spot_price, strike, time_to_expiry, risk_free_rate, volatility):
         if time_to_expiry <= 0:
             return 0.0
@@ -901,14 +935,16 @@ class VolcanicRockOptionsStrategy(MarketMakeStrategy):
     def estimate_implied_volatility(self, market_price, spot_price, strike, time_to_expiry, risk_free_rate, precision=0.001):
         if market_price <= 0:
             return 0.01
-        vol_low = 0.01
-        vol_high = 2.0
+        vol_low = 0.02
+        vol_high = 1.0
         vol_mid = (vol_low + vol_high) / 2
+        def objective_function(vol):
+            # if strike < spot_price:
+            #     puts = market_price + spot_price - strike
+            #     return self.black_scholes_puts(spot_price, strike, time_to_expiry, risk_free_rate, vol) - puts
+            return self.black_scholes_calls(spot_price, strike, time_to_expiry, risk_free_rate, vol) - market_price
         for _ in range(50):
-            price = self.black_scholes(spot_price, strike, time_to_expiry, risk_free_rate, vol_mid)
-            if abs(price - market_price) < precision:
-                return vol_mid
-            if price > market_price:
+            if objective_function(vol_mid) > 0:
                 vol_high = vol_mid
             else:
                 vol_low = vol_mid
@@ -917,16 +953,42 @@ class VolcanicRockOptionsStrategy(MarketMakeStrategy):
     
     def delta_hedge(self, state: TradingState, order: Order, delta: float) -> dict[str: Order]:
         hedge_orders = {"VOLCANIC_ROCK" : None}
-        hedge_quantity = round(order.quantity * delta)
+        hedge_quantity = -round(order.quantity * delta)
+        rock_position = state.position.get("VOLCANIC_ROCK", 0)
         if "VOLCANIC_ROCK" not in state.order_depths or hedge_quantity == 0:
             return hedge_orders
         rock_depth = state.order_depths["VOLCANIC_ROCK"]
         if hedge_quantity < 0:
-            best_ask = min(rock_depth.sell_orders.keys())
-            hedge_orders["VOLCANIC_ROCK"] = Order("VOLCANIC_ROCK", best_ask, hedge_quantity)
-        elif hedge_quantity > 0:
+            rock_capacity = self.rock_limit + rock_position
             best_bid = max(rock_depth.buy_orders.keys())
+            hedge_quantity = -min(rock_capacity, -hedge_quantity)
             hedge_orders["VOLCANIC_ROCK"] = Order("VOLCANIC_ROCK", best_bid, hedge_quantity)
+        elif hedge_quantity > 0:
+            rock_capacity = self.rock_limit - rock_position
+            best_ask = min(rock_depth.sell_orders.keys())
+            hedge_quantity = min(rock_capacity, hedge_quantity)
+            hedge_orders["VOLCANIC_ROCK"] = Order("VOLCANIC_ROCK", best_ask, hedge_quantity)
+        self.net_delta -= hedge_quantity
+        return hedge_orders
+    
+    def hedge_net_delta(self, state: TradingState) -> dict[str: Order]:
+        hedge_orders = {"VOLCANIC_ROCK" : None}
+        hedge_quantity = -round(self.net_delta)
+        rock_position = state.position.get("VOLCANIC_ROCK", 0)
+        if "VOLCANIC_ROCK" not in state.order_depths or hedge_quantity == 0:
+            return hedge_orders
+        rock_depth = state.order_depths["VOLCANIC_ROCK"]
+        if hedge_quantity < 0:
+            rock_capacity = self.rock_limit + rock_position
+            best_bid = max(rock_depth.buy_orders.keys())
+            hedge_quantity = -min(rock_capacity, -hedge_quantity)
+            hedge_orders["VOLCANIC_ROCK"] = Order("VOLCANIC_ROCK", best_bid, hedge_quantity)
+        elif hedge_quantity > 0:
+            rock_capacity = self.rock_limit - rock_position
+            best_ask = min(rock_depth.sell_orders.keys())
+            hedge_quantity = min(rock_capacity, hedge_quantity)
+            hedge_orders["VOLCANIC_ROCK"] = Order("VOLCANIC_ROCK", best_ask, hedge_quantity)
+        self.net_delta -= hedge_quantity
         return hedge_orders
     
     def spot_price(self, state: TradingState) -> float:
@@ -939,59 +1001,121 @@ class VolcanicRockOptionsStrategy(MarketMakeStrategy):
         else:
             return self.trader_data.get("VOLCANIC_ROCK_last_price", 10200)
     
-    def mid_price(self, state: TradingState) -> float:
-        if len(self.order_depth.sell_orders) != 0 and len(self.order_depth.buy_orders) != 0:
-            best_ask = min(self.order_depth.sell_orders.keys())
-            best_bid = max(self.order_depth.buy_orders.keys())
-            self.trader_data[f"{self.symbol}_last_price"] = (best_ask + best_bid) / 2
-            return (best_ask + best_bid) / 2
-        else:
-            return self.trader_data.get(f"{self.symbol}_last_price", 10200)
-    
-    def option_orders(self, state: TradingState, position: int, buy_order_volume: int, sell_order_volume: int) -> dict[str: Order]:
-        spot = self.spot_price(state)
-        mid = self.mid_price(state)
+    def option_orders(self, state: TradingState, position: int, spot: float, buy_order_volume: int, sell_order_volume: int) -> dict[str: Order]:
         orders = {self.symbol : [], "VOLCANIC_ROCK" : []}
         time_to_expiry = (self.days_to_expiry - state.timestamp / 1000000) / 365.0
         m_t = math.log(self.strike_price / spot) / math.sqrt(time_to_expiry)
-        smile_iv = 0.2373 * m_t**2 - 0.0029 * m_t + 0.1492
-        implied_vol = self.estimate_implied_volatility(mid, spot, self.strike_price, time_to_expiry, 0)
-        iv_diff = implied_vol - smile_iv
-        if iv_diff > self.threshold:
-            #buy option
-            if len(self.order_depth.sell_orders) > 0:
-                best_ask = min(self.order_depth.sell_orders.keys())
-                best_ask_volume = -self.order_depth.sell_orders[best_ask]
-                available_capacity = self.limit - position
-                quantity = min(best_ask_volume, available_capacity)
-                if quantity > 0:
-                    orders[self.symbol].append(Order(self.symbol, best_ask, quantity))
-                    hedge_orders = self.delta_hedge(state, orders[self.symbol][-1], self.delta(spot, self.strike_price, time_to_expiry, 0, implied_vol))
-                    if hedge_orders["VOLCANIC_ROCK"] != None:
-                        orders["VOLCANIC_ROCK"].append(hedge_orders["VOLCANIC_ROCK"])
-                    buy_order_volume += quantity
-        elif iv_diff < -self.threshold:
-            #sell option
-            if len(self.order_depth.buy_orders) > 0:
-                best_bid = max(self.order_depth.buy_orders.keys())
-                best_bid_volume = self.order_depth.buy_orders[best_bid]
-                available_capacity = self.limit + position
-                quantity = min(best_bid_volume, available_capacity)
-                if quantity > 0:
-                    orders[self.symbol].append(Order(self.symbol, best_bid, -quantity))
-                    hedge_orders = self.delta_hedge(state, orders[self.symbol][-1], -self.delta(self.spot_price(state), self.strike_price, time_to_expiry, 0, implied_vol))
-                    if hedge_orders["VOLCANIC_ROCK"] != None:
-                        orders["VOLCANIC_ROCK"].append(hedge_orders["VOLCANIC_ROCK"])
-                    sell_order_volume += quantity
+        # smile_iv = 0.237 * np.square(m_t) + 0.0029 * m_t + 0.1492
+        smile_iv = self.smile_volatility(m_t)
+        # f.write(f"Smile IV: {smile_iv}\n")
+        if len(self.order_depth.sell_orders) != 0:
+            sorted_sell_orders = sorted(self.order_depth.sell_orders.keys())
+            for i in range(min(3, len(sorted_sell_orders))):
+                best_ask = sorted_sell_orders[i]
+                best_ask_amount = -1 * self.order_depth.sell_orders[best_ask]
+                implied_vol = self.estimate_implied_volatility(best_ask, spot, self.strike_price, time_to_expiry, 0)
+                iv_diff = smile_iv - implied_vol
+                if iv_diff > self.threshold:
+                    available_capacity = self.limit - position
+                    quantity = min(best_ask_amount, available_capacity, self.adverse_volume)
+                    if quantity > 0:
+                        orders[self.symbol].append(Order(self.symbol, best_ask, quantity))
+                        delta = self.delta(spot, self.strike_price, time_to_expiry, 0, implied_vol)
+                        # hedge_orders = self.delta_hedge(state, orders[self.symbol][-1], self.delta(spot, self.strike_price, time_to_expiry, 0, implied_vol))
+                        # if hedge_orders["VOLCANIC_ROCK"] != None:
+                        #     orders["VOLCANIC_ROCK"].append(hedge_orders["VOLCANIC_ROCK"])
+                        buy_order_volume += quantity
+                        self.order_depth.sell_orders[best_ask] += quantity
+                        self.net_delta += delta * quantity
+                        if self.order_depth.sell_orders[best_ask] == 0:
+                            del self.order_depth.sell_orders[best_ask]
+            # best_ask = min(self.order_depth.sell_orders.keys())
+            # best_ask_amount = -1 * self.order_depth.sell_orders[best_ask]
+            # implied_vol = self.estimate_implied_volatility(best_ask, spot, self.strike_price, time_to_expiry, 0)
+            # f.write(f"Best Ask: {best_ask}, Strike: {self.strike_price}, Spot: {spot} Implied Vol: {implied_vol}, Smile IV: {smile_iv}\n")
+            # iv_diff = smile_iv - implied_vol
+            # if iv_diff > self.threshold:
+            #     available_capacity = self.limit - position
+            #     quantity = min(best_ask_amount, available_capacity, self.adverse_volume)
+            #     if quantity > 0:
+            #         orders[self.symbol].append(Order(self.symbol, best_ask, quantity))
+            #         delta = self.delta(spot, self.strike_price, time_to_expiry, 0, implied_vol)
+            #         # hedge_orders = self.delta_hedge(state, orders[self.symbol][-1], self.delta(spot, self.strike_price, time_to_expiry, 0, implied_vol))
+            #         # if hedge_orders["VOLCANIC_ROCK"] != None:
+            #         #     orders["VOLCANIC_ROCK"].append(hedge_orders["VOLCANIC_ROCK"])
+            #         buy_order_volume += quantity
+            #         self.order_depth.sell_orders[best_ask] += quantity
+            #         self.net_delta += delta * quantity
+            #         if self.order_depth.sell_orders[best_ask] == 0:
+            #             del self.order_depth.sell_orders[best_ask]
+        if len(self.order_depth.buy_orders) != 0:
+            sorted_buy_orders = sorted(self.order_depth.buy_orders.keys(), reverse=True)
+            for i in range(min(3, len(sorted_buy_orders))):
+                best_bid = sorted_buy_orders[i]
+                best_bid_amount = self.order_depth.buy_orders[best_bid]
+                implied_vol = self.estimate_implied_volatility(best_bid, spot, self.strike_price, time_to_expiry, 0)
+                iv_diff = smile_iv - implied_vol
+                if iv_diff < -self.threshold:
+                    available_capacity = self.limit + position
+                    quantity = min(best_bid_amount, available_capacity, self.adverse_volume)
+                    if quantity > 0:
+                        orders[self.symbol].append(Order(self.symbol, best_bid, -quantity))
+                        delta = self.delta(spot, self.strike_price, time_to_expiry, 0, implied_vol)
+                        # hedge_orders = self.delta_hedge(state, orders[self.symbol][-1], self.delta(spot, self.strike_price, time_to_expiry, 0, implied_vol))
+                        # if hedge_orders["VOLCANIC_ROCK"] != None:
+                        #     orders["VOLCANIC_ROCK"].append(hedge_orders["VOLCANIC_ROCK"])
+                        sell_order_volume += quantity
+                        self.order_depth.buy_orders[best_bid] -= quantity
+                        if self.order_depth.buy_orders[best_bid] == 0:
+                            del self.order_depth.buy_orders[best_bid]
+            # best_bid = max(self.order_depth.buy_orders.keys())
+            # best_bid_amount = self.order_depth.buy_orders[best_bid]
+            # implied_vol = self.estimate_implied_volatility(best_bid, spot, self.strike_price, time_to_expiry, 0)
+            # iv_diff = smile_iv - implied_vol
+            # if iv_diff < -self.threshold:
+            #     available_capacity = self.limit + position
+            #     quantity = min(best_bid_amount, available_capacity, self.adverse_volume)
+            #     if quantity > 0:
+            #         orders[self.symbol].append(Order(self.symbol, best_bid, -quantity))
+            #         delta = self.delta(spot, self.strike_price, time_to_expiry, 0, implied_vol)
+            #         self.net_delta += delta * -quantity
+            #         # hedge_orders = self.delta_hedge(state, orders[self.symbol][-1], self.delta(spot, self.strike_price, time_to_expiry, 0, implied_vol))
+            #         # if hedge_orders["VOLCANIC_ROCK"] != None:
+            #         #     orders["VOLCANIC_ROCK"].append(hedge_orders["VOLCANIC_ROCK"])
+            #         sell_order_volume += quantity
+            #         self.order_depth.buy_orders[best_bid] -= quantity
+            #         if self.order_depth.buy_orders[best_bid] == 0:
+            #             del self.order_depth.buy_orders[best_bid]
         return orders, buy_order_volume, sell_order_volume
 
-        
     def act(self, state: TradingState):
+        self.net_delta = self.trader_data.get("net_delta", 0)
+        spot = self.spot_price(state)
+        self.fair_value = self.fair_price(self.strike_price, spot, (self.days_to_expiry - state.timestamp / 1000000) / 365.0, 0)
+        # f.write(f"Fair Value: {self.fair_value}, Spot: {spot}, Strike: {self.strike_price}\n")
         position = state.position.get(self.symbol, 0)
         buy_order_volume = 0
         sell_order_volume = 0
-        option_orders, buy_order_volume, sell_order_volume = self.option_orders(state, position, buy_order_volume, sell_order_volume)
-        return option_orders
+        option_orders, buy_order_volume, sell_order_volume = self.option_orders(state, position, spot, buy_order_volume, sell_order_volume)
+        hedge_orders = self.hedge_net_delta(state)
+        if hedge_orders["VOLCANIC_ROCK"] != None:
+            option_orders["VOLCANIC_ROCK"].append(hedge_orders["VOLCANIC_ROCK"])
+        clear, buy_order_volume, sell_order_volume = self.clear_orders(position, buy_order_volume, sell_order_volume)
+        for order in clear:
+            price = order.price
+            implied_vol = self.estimate_implied_volatility(price, spot, self.strike_price, (self.days_to_expiry - state.timestamp / 1000000) / 365.0, 0)
+            hedge_orders = self.delta_hedge(state, order, self.delta(spot, self.strike_price, (self.days_to_expiry - state.timestamp / 1000000) / 365.0, 0, implied_vol))
+            if hedge_orders["VOLCANIC_ROCK"] != None:
+                option_orders["VOLCANIC_ROCK"].append(hedge_orders["VOLCANIC_ROCK"])
+        make, _, _ = self.make_orders(position, buy_order_volume, sell_order_volume)
+        for order in make:
+            price = order.price
+            implied_vol = self.estimate_implied_volatility(price, spot, self.strike_price, (self.days_to_expiry - state.timestamp / 1000000) / 365.0, 0)
+            hedge_orders = self.delta_hedge(state, order, self.delta(spot, self.strike_price, (self.days_to_expiry - state.timestamp / 1000000) / 365.0, 0, implied_vol))
+            if hedge_orders["VOLCANIC_ROCK"] != None:
+                option_orders["VOLCANIC_ROCK"].append(hedge_orders["VOLCANIC_ROCK"])
+        self.trader_data["net_delta"] = self.net_delta
+        return {self.symbol: option_orders[self.symbol] + clear + make, "VOLCANIC_ROCK": option_orders["VOLCANIC_ROCK"]}
 
 class Voucher9500Strategy(VolcanicRockOptionsStrategy):
     def __init__(self, symbol: str, limit: int, order_depth: OrderDepth, trader_data):
@@ -1041,16 +1165,14 @@ class Trader:
             # "RAINFOREST_RESIN" : ResinStrategy, 
             # "KELP" : KelpStrategy, 
             # "SQUID_INK" : SquidInkStrategy,
-            # "CROISSANTS" : CroissantsStrategy, 
-            # "JAMS" : JamsStrategy, 
-            # "DJEMBES" : DjembesStrategy,
             # "PICNIC_BASKET1": PicnicBasket1Strategy, 
             # "PICNIC_BASKET2": PicnicBasket2Strategy,
             "VOLCANIC_ROCK_VOUCHER_9500": Voucher9500Strategy,
             "VOLCANIC_ROCK_VOUCHER_9750": Voucher9750Strategy,
             "VOLCANIC_ROCK_VOUCHER_10000": Voucher10000Strategy,
             "VOLCANIC_ROCK_VOUCHER_10250": Voucher10250Strategy,
-            "VOLCANIC_ROCK_VOUCHER_10500": Voucher10500Strategy}.items()}
+            "VOLCANIC_ROCK_VOUCHER_10500": Voucher10500Strategy
+            }.items()}
         conversions = 0
         orders = {}
         for symbol, strategy in strategies.items():
@@ -1060,5 +1182,5 @@ class Trader:
                     orders[symbol] = order_list
         new_trader_data = jsonpickle.encode(trader_data)
 
-        # logger.flush(state, orders, conversions, new_trader_data)
+        logger.flush(state, orders, conversions, {})
         return orders, conversions, new_trader_data
