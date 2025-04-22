@@ -325,6 +325,18 @@ class MarketMakeStrategy():
             sell_order_volume += sell_qty
 
         return orders, buy_order_volume, sell_order_volume
+    
+    def get_bot_signals(self, state: TradingState) -> list[str]:
+        recent_trades = state.market_trades.get(self.symbol, [])
+        bots_to_follow = self.trader_data.get("bot_signals", {}).get(self.symbol, [])
+        
+        signals = []
+        for trade in recent_trades:
+            if trade.buyer in bots_to_follow:
+                signals.append(("BUY", trade.price, trade.buyer))
+            elif trade.seller in bots_to_follow:
+                signals.append(("SELL", trade.price, trade.seller))
+        return signals
 
     def act(self, state: TradingState):
         position = state.position.get(self.symbol, 0)
@@ -408,8 +420,36 @@ class KelpStrategy(MarketMakeStrategy):
         return fair
 
     def act(self, state: TradingState):
-        self.fair_value = self.fair_price()
-        return super().act(state)
+        orders = []
+        position = state.position.get(self.symbol, 0)
+        limit = self.limit
+        order_depth = state.order_depths[self.symbol]
+        market_trades = state.market_trades.get(self.symbol, [])
+
+        bots_to_follow = self.trader_data.get("bot_signals", {}).get(self.symbol, [])
+        best_bid = max(order_depth.buy_orders.keys()) if order_depth.buy_orders else None
+        best_ask = min(order_depth.sell_orders.keys()) if order_depth.sell_orders else None
+
+        for trade in reversed(market_trades[-5:]):  # look at the last 5 trades
+            if trade.buyer in bots_to_follow:
+                # Trusted bot bought => price might rise => we buy too
+                follow_price = best_ask
+                if follow_price and position < limit:
+                    orders.append(Order(self.symbol, follow_price, 1))  # Buy 1
+                    break  # optional: only follow one signal per step
+
+            elif trade.seller in bots_to_follow:
+                # Trusted bot sold => price might fall => we sell too
+                follow_price = best_bid
+                if follow_price and position > -limit:
+                    orders.append(Order(self.symbol, follow_price, -1))  # Sell 1
+                    break
+
+        # If we didn't follow anyone, fallback to default behavior
+        if not orders:
+            return super().act(state)
+
+        return {self.symbol: orders}
     
 class SquidInkStrategy(MarketMakeStrategy):
 
@@ -1727,7 +1767,15 @@ class Trader:
         }
 
     def run(self, state : TradingState) -> tuple[dict[Symbol, list[Order]], int , str]:
-        trader_data = {}
+        trader_data = {
+            "bot_signals": {
+                "KELP": ["Charlie"],
+                "RAINFOREST_RESIN": ["Charlie"],
+                "CROISSANTS": ["Caesar"],
+                "DJEMBES": ["Caesar"],
+                "JAMS": ["Caesar"],
+            }
+        }
         if state.traderData != None and state.traderData != "":
             trader_data = jsonpickle.decode(state.traderData)
         
